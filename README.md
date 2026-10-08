@@ -1,6 +1,6 @@
 # Communauté sportive
 
-Communauté sportive permet de publier une séance, suivre d'autres membres et échanger en privé. Le dépôt conserve son nom technique `SocialBook`.
+Communauté sportive permet de publier une séance, suivre d'autres membres et échanger en privé. Le dépôt public s’appelle [communaute-sportive](https://github.com/daoudasidibe224/communaute-sportive).
 
 ## Ce que vous pouvez faire
 
