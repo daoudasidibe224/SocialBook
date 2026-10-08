@@ -359,16 +359,29 @@ test("conversations and messages require membership and cannot forge sender iden
   await eve.get(`/api/messages/${conversationId}`).expect(403);
   await eve
     .post("/api/messages")
-    .send({ conversationId, text: "attack" })
+    .send({
+      requestId: require("node:crypto").randomUUID(),
+      conversationId,
+      text: "attack",
+    })
     .expect(403);
   await eve.get(`/api/conversations/${aliceId}`).expect(403);
   await alice
     .post("/api/messages")
-    .send({ conversationId, sender: bobId, text: "forged" })
+    .send({
+      requestId: require("node:crypto").randomUUID(),
+      conversationId,
+      sender: bobId,
+      text: "forged",
+    })
     .expect(403);
   await alice
     .post("/api/messages")
-    .send({ conversationId, text: "À demain !" })
+    .send({
+      requestId: require("node:crypto").randomUUID(),
+      conversationId,
+      text: "À demain !",
+    })
     .expect(201);
   const messages = await bob.get(`/api/messages/${conversationId}`).expect(200);
   assert.equal(messages.body[0].sender, aliceId);
@@ -393,7 +406,11 @@ test("Socket.IO rejects anonymous clients and only relays persisted messages to 
   const received = once(socket, "getMessage");
   await alice
     .post("/api/messages")
-    .send({ conversationId, text: "Message en direct" })
+    .send({
+      requestId: require("node:crypto").randomUUID(),
+      conversationId,
+      text: "Message en direct",
+    })
     .expect(201);
   const [message] = await received;
   assert.equal(message.text, "Message en direct");
@@ -403,7 +420,11 @@ test("Socket.IO rejects anonymous clients and only relays persisted messages to 
 test("invalid boundaries, missing records, empty bio and concurrent conversation creation", async () => {
   await alice
     .post("/api/messages")
-    .send({ conversationId, text: "x".repeat(2001) })
+    .send({
+      requestId: require("node:crypto").randomUUID(),
+      conversationId,
+      text: "x".repeat(2001),
+    })
     .expect(400);
   await alice.get("/api/user/not-an-id").expect(400);
   await alice.get("/api/user/000000000000000000000000").expect(404);

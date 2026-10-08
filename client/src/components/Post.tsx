@@ -61,6 +61,8 @@ export function Composer({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const inFlight = useRef(false);
+  const submission = useRef<string | null>(null);
   useEffect(() => {
     if (!file) {
       setPreview("");
@@ -83,24 +85,31 @@ export function Composer({
       return;
     }
     setFile(image);
+    submission.current = null;
   }
   async function publish(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (inFlight.current || (!message.trim() && !file)) return;
+    inFlight.current = true;
     setBusy(true);
     setError("");
     try {
       const data = new FormData();
       data.append("message", message);
       data.append("posterId", user._id);
+      submission.current ??= crypto.randomUUID();
+      data.append("requestId", submission.current);
       if (file) data.append("file", file);
       await api.post("/api/post", data);
       await onPublish();
       setMessage("");
       setFile(null);
       if (input.current) input.current.value = "";
+      submission.current = null;
     } catch (err) {
       setError(errorMessage(err));
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }
@@ -122,7 +131,10 @@ export function Composer({
         placeholder="Racontez votre dernière séance…"
         maxLength={500}
         value={message}
-        onChange={(event) => setMessage(event.target.value)}
+        onChange={(event) => {
+          submission.current = null;
+          setMessage(event.target.value);
+        }}
         rows={3}
       />
       {preview && (
@@ -132,7 +144,9 @@ export function Composer({
             type="button"
             className="icon-button"
             aria-label="Retirer la photo"
+            disabled={busy}
             onClick={() => {
+              submission.current = null;
               setFile(null);
               if (input.current) input.current.value = "";
             }}
@@ -190,17 +204,25 @@ export function PostCard({
   const author = users.find((u) => u._id === post.posterId);
   const [comments, setComments] = useState(false);
   const [comment, setComment] = useState("");
-  const [edit, setEdit] = useState<{ id?: string; text: string } | null>(null);
+  const [edit, setEdit] = useState<{
+    id?: string;
+    text: string;
+    original: string;
+  } | null>(null);
   const [menu, setMenu] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const inFlight = useRef(false);
+  const commentSubmission = useRef<string | null>(null);
   const liked = post.likers.includes(user._id);
   async function action(
     method: "patch" | "put" | "delete",
     url: string,
     data?: Record<string, string>,
   ) {
+    if (inFlight.current) return false;
+    inFlight.current = true;
     setBusy(true);
     setError("");
     try {
@@ -211,6 +233,7 @@ export function PostCard({
       setError(errorMessage(err));
       return false;
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }
@@ -242,7 +265,7 @@ export function PostCard({
               <div className="menu">
                 <button
                   onClick={() => {
-                    setEdit({ text: post.message });
+                    setEdit({ text: post.message, original: post.message });
                     setMenu(false);
                   }}
                 >
@@ -328,7 +351,9 @@ export function PostCard({
                   <button
                     className="icon-button"
                     aria-label="Modifier le commentaire"
-                    onClick={() => setEdit({ id: c._id, text: c.text })}
+                    onClick={() =>
+                      setEdit({ id: c._id, text: c.text, original: c.text })
+                    }
                   >
                     <Pencil size={15} />
                   </button>
@@ -353,13 +378,18 @@ export function PostCard({
           <form
             onSubmit={async (event) => {
               event.preventDefault();
+              if (inFlight.current || !comment.trim()) return;
+              commentSubmission.current ??= crypto.randomUUID();
               if (
                 await action("patch", `/api/post/comment-post/${post._id}`, {
                   text: comment,
                   commenterId: user._id,
+                  requestId: commentSubmission.current,
                 })
-              )
+              ) {
                 setComment("");
+                commentSubmission.current = null;
+              }
             }}
           >
             <label className="sr-only" htmlFor={`comment-${post._id}`}>
@@ -369,7 +399,10 @@ export function PostCard({
               id={`comment-${post._id}`}
               disabled={busy}
               value={comment}
-              onChange={(event) => setComment(event.target.value)}
+              onChange={(event) => {
+                commentSubmission.current = null;
+                setComment(event.target.value);
+              }}
               placeholder="Encouragez, échangez…"
               maxLength={500}
               required
@@ -403,10 +436,15 @@ export function PostCard({
                 ? await action(
                     "patch",
                     `/api/post/edit-comment-post/${post._id}`,
-                    { commentId: edit.id, text: edit.text },
+                    {
+                      commentId: edit.id,
+                      text: edit.text,
+                      expectedText: edit.original,
+                    },
                   )
                 : await action("put", `/api/post/${post._id}`, {
                     message: edit.text,
+                    expectedMessage: edit.original,
                   });
               if (ok) setEdit(null);
             }}
@@ -415,6 +453,7 @@ export function PostCard({
               Texte
               <textarea
                 value={edit.text}
+                disabled={busy}
                 maxLength={500}
                 onChange={(event) =>
                   setEdit({ ...edit, text: event.target.value })

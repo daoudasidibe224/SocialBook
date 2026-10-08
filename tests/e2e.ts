@@ -12,6 +12,10 @@ import { Server } from "socket.io";
 import { createApp } from "../app";
 import User from "../models/user.model";
 import Conversation from "../models/conversation.model";
+import Message from "../models/message.model";
+import Session from "../models/session.model";
+import Post from "../models/post.model";
+import type { ServerEvents, SocketIdentity } from "../socket";
 import initializeSocket from "../socket";
 async function run() {
   process.env.TOKEN_SECRET = "isolated-e2e-secret-with-at-least-32-characters";
@@ -24,9 +28,20 @@ async function run() {
   const url = process.env.CLIENT_URL;
   const database = await MongoMemoryServer.create();
   await mongoose.connect(database.getUri());
-  await Promise.all([User.init(), Conversation.init()]);
+  await Promise.all([
+    User.init(),
+    Conversation.init(),
+    Message.init(),
+    Session.init(),
+    Post.init(),
+  ]);
   const server = createServer(app);
-  const sockets = new Server(server, {
+  const sockets = new Server<
+    Record<string, never>,
+    ServerEvents,
+    Record<string, never>,
+    SocketIdentity
+  >(server, {
     cors: { origin: url, credentials: true },
   });
   initializeSocket(sockets);
@@ -83,6 +98,15 @@ async function run() {
     }
     assert.ok(overflow.scroll <= overflow.width, "Horizontal overflow");
   }
+  async function doubleSubmit(page: Page, label: string) {
+    await page.getByLabel(label, { exact: true }).evaluate((element) => {
+      const form = element.closest("form");
+      if (!(form instanceof HTMLFormElement))
+        throw new Error("Formulaire introuvable");
+      form.requestSubmit();
+      form.requestSubmit();
+    });
+  }
   async function login(page: Page, email: string) {
     await page.goto(url);
     await page.getByLabel("Adresse e-mail").fill(email);
@@ -130,6 +154,7 @@ async function run() {
       await capture(a, `social-auth-${width}`);
     }
     await a.setViewportSize({ width: 1440, height: 1000 });
+    await a.emulateMedia({ reducedMotion: "reduce" });
     await a
       .getByRole("button", { name: "Créer un compte", exact: true })
       .click();
@@ -157,7 +182,32 @@ async function run() {
     await a
       .getByLabel("Votre publication", { exact: true })
       .fill("Sortie de 10 km sur les quais");
-    await a.getByRole("button", { name: "Publier", exact: true }).click();
+    let postRetryKey = "";
+    await a.route("**/api/post", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      postRetryKey =
+        route
+          .request()
+          .postData()
+          ?.match(/name="requestId"\r\n\r\n([^\r]+)/)?.[1] ?? "";
+      await route.abort();
+    });
+    await doubleSubmit(a, "Votre publication");
+    await expect(
+      a.getByLabel("Votre publication", { exact: true }),
+    ).toHaveValue("Sortie de 10 km sur les quais");
+    await expect(a.locator(".composer [role=alert]")).toBeVisible();
+    assert.ok(postRetryKey);
+    await a.unroute("**/api/post");
+    const published = a.waitForRequest(
+      (request) =>
+        request.method() === "POST" && request.url().endsWith("/api/post"),
+    );
+    await doubleSubmit(a, "Votre publication");
+    assert.ok((await published).postData()?.includes(postRetryKey));
     await expect(a.locator(".post-message")).toHaveText(
       "Sortie de 10 km sur les quais",
     );
@@ -172,12 +222,29 @@ async function run() {
     await b
       .getByLabel("Votre commentaire", { exact: true })
       .fill("Bravo pour cette séance !");
-    await b
-      .getByRole("button", { name: "Envoyer le commentaire", exact: true })
-      .click();
+    let commentRetryBody = "";
+    await b.route("**/api/post/comment-post/*", async (route) => {
+      commentRetryBody = route.request().postData() ?? "";
+      await route.abort();
+    });
+    await doubleSubmit(b, "Votre commentaire");
+    await expect(b.locator(".post-card [role=alert]")).toBeVisible();
+    await expect(
+      b.getByLabel("Votre commentaire", { exact: true }),
+    ).toHaveValue("Bravo pour cette séance !");
+    await b.unroute("**/api/post/comment-post/*");
+    const commentRequest = b.waitForRequest((request) =>
+      request.url().includes("/comment-post/"),
+    );
+    await doubleSubmit(b, "Votre commentaire");
+    assert.equal((await commentRequest).postData(), commentRetryBody);
     await expect(b.locator(".comment")).toContainText(
       "Bravo pour cette séance !",
     );
+    assert.equal(await Post.countDocuments({ deleted: false }), 1);
+    const persistedPost = await Post.findOne();
+    assert.ok(persistedPost);
+    assert.equal(persistedPost.comments.length, 1);
     await a.reload();
     await a.getByRole("button", { name: "Sauvegarder la publication" }).click();
     await a
@@ -194,12 +261,32 @@ async function run() {
     await a.getByRole("button", { name: "Options de la publication" }).click();
     await a.getByRole("button", { name: "Modifier", exact: true }).click();
     await expect(a.getByRole("dialog")).toBeVisible();
+    const a2 = await alice.newPage();
+    a2.on("pageerror", (error) => errors.push(error.message));
+    await a2.goto(url + "/home");
+    await a2.getByRole("button", { name: "Options de la publication" }).click();
+    await a2.getByRole("button", { name: "Modifier", exact: true }).click();
+    await a2
+      .getByRole("dialog")
+      .getByLabel("Texte")
+      .fill("Modification périmée conservée");
     await a.getByRole("dialog").getByLabel("Texte").fill("Sortie de 12 km");
     await a
       .getByRole("dialog")
       .getByRole("button", { name: "Enregistrer" })
       .click();
     await expect(a.locator(".post-message")).toHaveText("Sortie de 12 km");
+    await a2
+      .getByRole("dialog")
+      .getByRole("button", { name: "Enregistrer" })
+      .click();
+    await expect(a2.getByRole("dialog").getByRole("alert")).toContainText(
+      "changé",
+    );
+    await expect(a2.getByRole("dialog").getByLabel("Texte")).toHaveValue(
+      "Modification périmée conservée",
+    );
+    await a2.keyboard.press("Escape");
     console.log("profile and chat");
     await a
       .getByRole("navigation", { name: "Navigation principale" })
@@ -218,9 +305,7 @@ async function run() {
     await a
       .getByLabel("Votre message", { exact: true })
       .fill("On court demain ?");
-    await a
-      .getByRole("button", { name: "Envoyer le message", exact: true })
-      .click();
+    await doubleSubmit(a, "Votre message");
     await expect(a.locator(".chat-messages")).toContainText(
       "On court demain ?",
     );
@@ -232,6 +317,85 @@ async function run() {
     await expect(b.locator(".chat-messages")).toContainText(
       "On court demain ?",
     );
+    await a2.goto(url + "/message");
+    await a2
+      .locator(".chat-contact")
+      .filter({ hasText: "bob" })
+      .first()
+      .click();
+    await expect(a2.locator(".chat-messages")).toContainText(
+      "On court demain ?",
+    );
+    await expect(
+      a.locator(".chat-messages p").filter({ hasText: "On court demain ?" }),
+    ).toHaveCount(1);
+    assert.equal(
+      await Message.countDocuments({ text: "On court demain ?" }),
+      1,
+    );
+    await a
+      .getByLabel("Votre message", { exact: true })
+      .fill("Confirmation après réponse perdue");
+    let messageRetryBody = "";
+    await a.route("**/api/messages", async (route) => {
+      messageRetryBody = route.request().postData() ?? "";
+      await route.fetch();
+      await route.abort();
+    });
+    await doubleSubmit(a, "Votre message");
+    await expect(a.getByLabel("Votre message", { exact: true })).toHaveValue(
+      "Confirmation après réponse perdue",
+    );
+    await expect(a.locator(".chat-main [role=alert]")).toBeVisible();
+    await a.unroute("**/api/messages");
+    const retryMessage = a.waitForRequest(
+      (request) =>
+        request.url().endsWith("/api/messages") && request.method() === "POST",
+    );
+    await doubleSubmit(a, "Votre message");
+    assert.equal((await retryMessage).postData(), messageRetryBody);
+    await expect(a.getByLabel("Votre message", { exact: true })).toHaveValue(
+      "",
+    );
+    await expect(
+      a
+        .locator(".chat-messages p")
+        .filter({ hasText: "Confirmation après réponse perdue" }),
+    ).toHaveCount(1);
+    await expect(
+      a2
+        .locator(".chat-messages p")
+        .filter({ hasText: "Confirmation après réponse perdue" }),
+    ).toHaveCount(1);
+    await expect(
+      b
+        .locator(".chat-messages p")
+        .filter({ hasText: "Confirmation après réponse perdue" }),
+    ).toHaveCount(1);
+    assert.equal(
+      await Message.countDocuments({
+        text: "Confirmation après réponse perdue",
+      }),
+      1,
+    );
+    await bob.setOffline(true);
+    await a
+      .getByLabel("Votre message", { exact: true })
+      .fill("Message pendant la coupure");
+    await doubleSubmit(a, "Votre message");
+    await expect(a.getByLabel("Votre message", { exact: true })).toHaveValue(
+      "",
+    );
+    await bob.setOffline(false);
+    await expect(b.locator(".chat-messages")).toContainText(
+      "Message pendant la coupure",
+      { timeout: 15000 },
+    );
+    await expect(
+      b
+        .locator(".chat-messages p")
+        .filter({ hasText: "Message pendant la coupure" }),
+    ).toHaveCount(1);
     await b
       .getByLabel("Votre message", { exact: true })
       .fill("Oui, à 9 heures.");
@@ -334,6 +498,7 @@ async function run() {
     await expect(a.locator(".post-card")).toHaveCount(0);
     await a.reload();
     await expect(a.locator(".post-card")).toHaveCount(0);
+    await a2.close();
     await a.getByRole("button", { name: "Se déconnecter" }).click();
     await expect(
       a.getByRole("heading", { name: "Content de vous revoir." }),
@@ -344,7 +509,7 @@ async function run() {
     ).toBeVisible();
     assert.deepEqual(errors, []);
     console.log(
-      "E2E PASS : inscription, connexion, publications, likes, commentaires, sauvegarde/reload, édition, follow, messages HTTP/socket/reload, bio/photo/reload, suppression, logout, 7 vues à 1440/390/320, clavier Escape, aucune erreur ou overflow.",
+      "E2E PASS : inscription/connexion, doubles soumissions post/commentaire/message, clés conservées après erreur réseau, conflit édition 2 onglets, likes/sauvegarde/reload/follow, messages 3 onglets HTTP/socket avec réponse perdue et rattrapage après coupure, bio/photo/reload, suppression/logout, 7 vues à 1440/390/320, clavier Escape/mouvement réduit, aucune erreur ou overflow.",
     );
   } catch (error) {
     console.error("Browser errors", errors);

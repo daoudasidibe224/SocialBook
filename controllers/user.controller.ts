@@ -1,3 +1,5 @@
+import Session from "../models/session.model";
+import { socketServer } from "../socket";
 import type { Handler } from "../utils/http";
 import { currentUser } from "../utils/http";
 import User from "../models/user.model";
@@ -46,7 +48,9 @@ export const deleteUser: Handler = async (req, res) => {
     {},
     { $pull: { followers: userId, following: userId } },
   );
+  await Session.deleteMany({ userId });
   await User.deleteOne({ _id: userId });
+  socketServer(req)?.in(`user:${userId}`).disconnectSockets(true);
   await Promise.all(
     [currentUser(req).picture, ...pictures.map((post) => post.picture)].map(
       removeImage,

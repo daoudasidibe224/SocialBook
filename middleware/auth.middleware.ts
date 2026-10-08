@@ -1,26 +1,17 @@
-import jwt from "jsonwebtoken";
 import User from "../models/user.model";
-import { id, secret, type Handler } from "../utils/http";
+import { verifySession } from "../utils/session";
+import type { Handler } from "../utils/http";
 export const checkUser: Handler = async (req, _res, next) => {
-  const cookie: unknown = req.cookies?.jwt;
   req.user = null;
-  if (typeof cookie === "string") {
-    let decoded;
-    try {
-      decoded = jwt.verify(cookie, secret(), { algorithms: ["HS256"] });
-    } catch {
-      next();
-      return;
-    }
-    if (typeof decoded === "object") {
-      let userId: string;
-      try {
-        userId = id(decoded.id);
-      } catch {
-        next();
-        return;
-      }
-      req.user = await User.findById(userId).select("-password");
+  req.authSession = null;
+  const verified = await verifySession(req.cookies?.jwt);
+  if (verified) {
+    const user = await User.findById(verified.session.userId).select(
+      "-password",
+    );
+    if (user) {
+      req.user = user;
+      req.authSession = verified.session;
     }
   }
   next();

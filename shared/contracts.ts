@@ -33,7 +33,16 @@ export const conversationSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
 });
+export const messageRequestSchema = z
+  .object({
+    conversationId: identifier,
+    text: z.string().trim().min(1).max(2000),
+    requestId: z.uuid().transform((value) => value.toLowerCase()),
+    sender: identifier.optional(),
+  })
+  .strict();
 export const messageSchema = z.object({
+  requestId: z.uuid().optional(),
   _id: identifier,
   conversationId: identifier,
   sender: identifier,

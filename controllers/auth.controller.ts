@@ -1,3 +1,5 @@
+import Session from "../models/session.model";
+import { socketServer } from "../socket";
 import type { Handler } from "../utils/http";
 import User, { loginUser } from "../models/user.model";
 import jwt from "jsonwebtoken";
@@ -33,7 +35,11 @@ export const signIn: Handler = async (req, res) => {
     throw fail(400, "Mot de passe invalide.");
   const user = await loginUser(email, req.body.password);
   if (!user) throw fail(401, "Adresse e-mail ou mot de passe incorrect.");
-  const token = jwt.sign({ id: String(user._id) }, secret(), {
+  const session = await Session.create({
+    userId: String(user._id),
+    expiresAt: new Date(Date.now() + 259200000),
+  });
+  const token = jwt.sign({ id: String(user._id), sid: session._id }, secret(), {
     algorithm: "HS256",
     expiresIn: "3d",
   });
@@ -43,7 +49,13 @@ export const signIn: Handler = async (req, res) => {
   });
   res.json({ user: user._id });
 };
-export const logout: Handler = (req, res) => {
+export const logout: Handler = async (req, res) => {
+  if (req.authSession) {
+    await Session.deleteOne({ _id: req.authSession._id });
+    socketServer(req)
+      ?.in(`session:${req.authSession._id}`)
+      .disconnectSockets(true);
+  }
   res.clearCookie("jwt", cookieOptions());
   res.status(204).end();
 };

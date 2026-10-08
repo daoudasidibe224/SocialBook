@@ -10,6 +10,7 @@ const MessageSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    requestId: { type: String },
     text: {
       type: String,
       required: true,
@@ -20,4 +21,8 @@ const MessageSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
+MessageSchema.index(
+  { sender: 1, requestId: 1 },
+  { unique: true, partialFilterExpression: { requestId: { $type: "string" } } },
+);
 export default mongoose.model("message", MessageSchema);

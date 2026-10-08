@@ -6,6 +6,21 @@ const PostSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    requestId: { type: String, select: false },
+    creationHash: { type: String, select: false },
+    deleted: { type: Boolean, default: false, select: false },
+    commentOperations: {
+      type: [
+        {
+          key: { type: String, required: true },
+          sender: { type: String, required: true },
+          hash: { type: String, required: true },
+          commentId: { type: String, required: true },
+        },
+      ],
+      default: [],
+      select: false,
+    },
     message: {
       type: String,
       trim: true,
@@ -33,6 +48,19 @@ const PostSchema = new mongoose.Schema(
   {
     timestamps: true,
   },
+);
+PostSchema.set("toJSON", {
+  transform: (_document, value: Record<string, unknown>) => {
+    delete value.requestId;
+    delete value.creationHash;
+    delete value.deleted;
+    delete value.commentOperations;
+    return value;
+  },
+});
+PostSchema.index(
+  { posterId: 1, requestId: 1 },
+  { unique: true, partialFilterExpression: { requestId: { $type: "string" } } },
 );
 
 export default mongoose.model("post", PostSchema);

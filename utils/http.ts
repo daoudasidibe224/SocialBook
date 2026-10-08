@@ -1,11 +1,15 @@
 import mongoose from "mongoose";
 import type { Request, RequestHandler } from "express";
 import type { HydratedDocument, InferSchemaType } from "mongoose";
+import Session from "../models/session.model";
 import User from "../models/user.model";
 export type Account = HydratedDocument<InferSchemaType<typeof User.schema>>;
 declare module "express-serve-static-core" {
   interface Request {
     user: Account | null;
+    authSession: HydratedDocument<
+      InferSchemaType<typeof Session.schema>
+    > | null;
   }
 }
 export type Handler = RequestHandler<

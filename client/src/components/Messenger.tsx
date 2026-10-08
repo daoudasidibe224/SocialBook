@@ -1,3 +1,4 @@
+import { mergeMessages } from "../messages";
 import type { FormEvent } from "react";
 import {
   conversationSchema,
@@ -26,7 +27,16 @@ export default function Messenger({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [incoming, setIncoming] = useState<Message | null>(null);
+  const currentRef = useRef<Conversation | null>(null);
+  currentRef.current = current;
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const sending = useRef(false);
+  const retry = useRef<{
+    requestId: string;
+    conversationId: string;
+    text: string;
+  } | null>(null);
   const end = useRef<HTMLDivElement>(null);
   const friendId = new URLSearchParams(location.search).get("with");
   useEffect(() => {
@@ -39,17 +49,60 @@ export default function Messenger({
       .catch((err) => {
         if (active) setError(errorMessage(err));
       });
+    async function syncConversations() {
+      try {
+        const res = await api.get(
+          conversationSchema.array(),
+          `/api/conversations/${user._id}`,
+        );
+        if (active) setConversations(res.data);
+      } catch (err) {
+        if (active) setError(errorMessage(err));
+      }
+    }
+    async function catchUp() {
+      const conversation = currentRef.current;
+      await syncConversations();
+      if (!conversation) return;
+      try {
+        const res = await api.get(
+          messageSchema.array(),
+          `/api/messages/${conversation._id}`,
+        );
+        if (active && currentRef.current?._id === conversation._id)
+          setMessages((previous) => mergeMessages(previous, res.data));
+      } catch (err) {
+        if (active) setError(errorMessage(err));
+      }
+    }
     const socket = io(API_URL, { withCredentials: true });
+    socket.on("sessionReady", () => {
+      if (active) {
+        setError("");
+        void catchUp();
+      }
+    });
     socket.on("getMessage", (payload: unknown) => {
+      if (!active) return;
       const parsed = messageSchema.safeParse(payload);
-      if (parsed.success) setIncoming(parsed.data);
-      else
+      if (!parsed.success) {
         setError("Un message reçu est invalide. Actualisez la conversation.");
+        return;
+      }
+      if (currentRef.current?._id === parsed.data.conversationId)
+        setMessages((previous) => mergeMessages(previous, [parsed.data]));
+      void syncConversations();
     });
     socket.on("connect_error", () => {
       if (active)
         setError(
-          "La connexion en direct est interrompue. Les messages restent accessibles en rouvrant la conversation.",
+          "La connexion en direct est interrompue. Les messages seront rattrapés à la reconnexion.",
+        );
+    });
+    socket.on("disconnect", (reason) => {
+      if (active && reason === "io server disconnect")
+        setError(
+          "Votre session a pris fin. Reconnectez-vous pour utiliser la messagerie.",
         );
     });
     return () => {
@@ -58,37 +111,17 @@ export default function Messenger({
     };
   }, [user._id]);
   useEffect(() => {
-    if (!incoming) return;
-    if (current?._id === incoming.conversationId)
-      setMessages((previous) =>
-        previous.some((m) => m._id === incoming._id)
-          ? previous
-          : [...previous, incoming],
-      );
-    api
-      .get(conversationSchema.array(), `/api/conversations/${user._id}`)
-      .then((res) => setConversations(res.data))
-      .catch(() => {});
-  }, [incoming, current?._id, user._id]);
-  useEffect(() => {
     if (!current) return;
     let active = true;
     setLoading(true);
     setMessages([]);
     setDraft("");
+    retry.current = null;
     api
       .get(messageSchema.array(), `/api/messages/${current._id}`)
       .then((res) => {
         if (active)
-          setMessages((previous) =>
-            [
-              ...res.data,
-              ...previous.filter(
-                (message) =>
-                  !res.data.some((existing) => existing._id === message._id),
-              ),
-            ].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
-          );
+          setMessages((previous) => mergeMessages(previous, res.data));
       })
       .catch((err) => {
         if (active) setError(errorMessage(err));
@@ -127,21 +160,36 @@ export default function Messenger({
   }
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy || !draft.trim() || !current) return;
+    if (sending.current || !draft.trim() || !current || loading) return;
+    const conversationId = current._id;
+    const value = draft.trim();
+    const original = draft;
+    if (
+      !retry.current ||
+      retry.current.conversationId !== conversationId ||
+      retry.current.text !== value
+    )
+      retry.current = {
+        requestId: crypto.randomUUID(),
+        conversationId,
+        text: value,
+      };
+    const intent = retry.current;
+    sending.current = true;
     setBusy(true);
     setError("");
     try {
-      const { data } = await api.post(
-        "/api/messages",
-        { conversationId: current._id, text: draft },
-        messageSchema,
-      );
-      if (!data) return;
-      setMessages((previous) => [...previous, data]);
-      setDraft("");
+      const { data } = await api.post("/api/messages", intent, messageSchema);
+      if (!data) throw new Error("Le message n’a pas été confirmé. Réessayez.");
+      if (currentRef.current?._id === conversationId) {
+        setMessages((previous) => mergeMessages(previous, [data]));
+        if (draftRef.current === original) setDraft("");
+      }
+      if (retry.current?.requestId === intent.requestId) retry.current = null;
     } catch (err) {
       setError(errorMessage(err));
     } finally {
+      sending.current = false;
       setBusy(false);
     }
   }

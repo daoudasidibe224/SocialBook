@@ -5,6 +5,7 @@ import { Server } from "socket.io";
 import mongoose from "mongoose";
 import { createApp } from "./app";
 import connect from "./config/db";
+import type { ServerEvents, SocketIdentity } from "./socket";
 import initializeSocket from "./socket";
 import { purgeOrphanImages } from "./utils/image-storage";
 dotenv.config({ path: [path.join(process.cwd(), ".env")], quiet: true });
@@ -38,7 +39,12 @@ async function start() {
   purgeTimer.unref();
   const app = createApp();
   const server = createServer(app);
-  const io = new Server(server, {
+  const io = new Server<
+    Record<string, never>,
+    ServerEvents,
+    Record<string, never>,
+    SocketIdentity
+  >(server, {
     cors: { origin: process.env.CLIENT_URL, credentials: true },
     allowRequest: (req, callback) =>
       callback(

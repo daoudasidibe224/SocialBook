@@ -101,7 +101,7 @@ export function createApp() {
     const message =
       status === 413
         ? "La photo ne doit pas dépasser 500 Ko."
-        : status === 409
+        : err.code === 11000
           ? "Ce pseudo ou cette adresse e-mail est déjà utilisé."
           : status === 500
             ? "Le serveur ne peut pas traiter cette demande."
