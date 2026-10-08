@@ -1,2 +1,11 @@
-/node_modules
-/config/.env
+node_modules/
+client/dist/
+.env
+.env.*
+!.env.example
+config/.env
+uploads/*/*
+!uploads/*/.gitkeep
+.DS_Store
+
+dist/

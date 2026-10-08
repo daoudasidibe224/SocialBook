@@ -1,58 +1,25 @@
 {
-  "name": "client2",
-  "version": "0.1.0",
+  "name": "socialbook-client",
+  "version": "2.0.0",
   "private": true,
-  "dependencies": {
-    "@craco/craco": "^6.2.0",
-    "@headlessui/react": "^1.4.1",
-    "@heroicons/react": "^1.0.3",
-    "@tailwindcss/aspect-ratio": "^0.2.1",
-    "@testing-library/jest-dom": "^5.11.4",
-    "@testing-library/react": "^11.1.0",
-    "@testing-library/user-event": "^12.1.10",
-    "axios": "^0.21.1",
-    "dotenv": "^10.0.0",
-    "js-cookie": "^3.0.0",
-    "react": "^17.0.2",
-    "react-dom": "^17.0.2",
-    "react-redux": "^7.2.4",
-    "react-router-dom": "^5.2.0",
-    "react-scripts": "4.0.3",
-    "redux": "^4.1.0",
-    "redux-devtools-extension": "^2.13.9",
-    "redux-thunk": "^2.3.0",
-    "socket.io-client": "^4.3.1",
-    "tailwind-scrollbar-hide": "^1.0.3",
-    "timeago.js": "^4.0.2",
-    "web-vitals": "^1.0.1"
-  },
+  "type": "module",
   "scripts": {
-    "start": "craco start",
-    "build": "craco build",
-    "test": "craco test",
-    "eject": "react-scripts eject"
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1"
   },
-  "eslintConfig": {
-    "extends": [
-      "react-app",
-      "react-app/jest"
-    ]
-  },
-  "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
+  "dependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "axios": "^1.20.0",
+    "socket.io-client": "^4.8.4",
+    "motion": "^14.0.0",
+    "lucide-react": "^1.53.0"
   },
   "devDependencies": {
-    "autoprefixer": "^9",
-    "postcss": "^7",
-    "tailwindcss": "npm:@tailwindcss/postcss7-compat"
+    "vite": "^8.3.4",
+    "@vitejs/plugin-react": "^6.1.2",
+    "tailwindcss": "^4.3.3",
+    "@tailwindcss/vite": "^4.3.3"
   }
 }
