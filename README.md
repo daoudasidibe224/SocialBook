@@ -22,7 +22,7 @@ L'interface utilise React 19, Vite 8, Tailwind CSS 4 pour sa base CSS, Motion et
 
 ## Installation locale
 
-Prérequis : Node.js 22.12 ou plus récent, npm et MongoDB 7 ou 8 accessible en local. Les vérifications ont été exécutées avec Node.js 24. Le navigateur et l'API doivent utiliser exactement le même nom d'hôte (`127.0.0.1`, pas un mélange avec `localhost`).
+Prérequis : Node.js 24.15 ou plus récent, npm et MongoDB 7 ou 8 accessible en local. Les vérifications ont été exécutées avec Node.js 24. Le navigateur et l'API doivent utiliser exactement le même nom d'hôte (`127.0.0.1`, pas un mélange avec `localhost`).
 
 ```sh
 npm ci
@@ -84,7 +84,7 @@ npm run build
 npm start
 ```
 
-`npm start` exécute le serveur compilé dans `dist/`. Avec `NODE_ENV=production`, Express sert aussi `client/dist` et les routes du navigateur. Pour ce mode, retirez `VITE_API_URL` avant la compilation : le frontend utilisera l'origine de la page. Renseignez `CLIENT_URL` avec cette même origine HTTPS, configurez un reverse proxy pour HTTP et Socket.IO, fournissez un secret privé et un dossier d'uploads persistant. Les cookies sont alors `HttpOnly`, `SameSite=Lax` et `Secure`. La configuration par défaut cible un frontend et une API sous la même origine en production.
+`npm start` exécute le serveur compilé dans `dist/`. Avec `NODE_ENV=production`, Express sert aussi `client/dist` et les routes du navigateur. Pour ce mode, retirez `VITE_API_URL` avant la compilation : le frontend utilisera l'origine de la page. Renseignez `CLIENT_URL` avec cette même origine HTTPS, configurez un reverse proxy pour HTTP et Socket.IO, fournissez un secret privé et un dossier d'uploads persistant. Les cookies sont alors `HttpOnly`, `SameSite=Lax` et `Secure`. La déconnexion efface le cookie du navigateur ; elle ne révoque pas un jeton déjà copié, qui reste valide jusqu’à son expiration de trois jours. La configuration par défaut cible un frontend et une API sous la même origine en production.
 
 Ce dépôt ne déploie aucun service automatiquement. La récupération de mot de passe, la vérification d'e-mail, la modération, la pagination et les notifications push ne sont pas implémentées. Les conversations restent consultables via HTTP quand la connexion en direct échoue ; il faut les rouvrir pour actualiser les messages. Le projet vise une petite communauté, pas un service à grande échelle.
 
