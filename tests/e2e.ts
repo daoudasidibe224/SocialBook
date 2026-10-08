@@ -330,11 +330,43 @@ async function run() {
     ).toHaveCount(1);
     await minimalPeer.close();
     await check(minimalPage);
+    let releaseExpiryCheck: () => void = () => {};
+    const expiryCheckGate = new Promise<void>((resolve) => {
+      releaseExpiryCheck = resolve;
+    });
+    let expiryCheckStarted: () => void = () => {};
+    const expiryCheckPending = new Promise<void>((resolve) => {
+      expiryCheckStarted = resolve;
+    });
+    let heldExpiryCheck = false;
+    await minimalPage.route("**/jwtid", async (route) => {
+      if (heldExpiryCheck) {
+        await route.continue();
+        return;
+      }
+      heldExpiryCheck = true;
+      const response = await route.fetch();
+      assert.equal(response.status(), 200);
+      expiryCheckStarted();
+      await expiryCheckGate;
+      await route.fulfill({ response });
+    });
+    await minimalPage.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await Promise.race([
+      expiryCheckPending,
+      new Promise<void>((_, reject) =>
+        setTimeout(() => {
+          releaseExpiryCheck();
+          reject(Error("La vérification de session retardée n’a pas démarré."));
+        }, 10000),
+      ),
+    ]);
     await Session.updateMany(
       { userId: String(minimalUser._id) },
       { $set: { expiresAt: new Date(0) } },
     );
     await minimalPage.evaluate(() => window.dispatchEvent(new Event("focus")));
+    releaseExpiryCheck();
     await expect(
       minimalPage.getByRole("heading", { name: "Content de vous revoir." }),
     ).toBeVisible();

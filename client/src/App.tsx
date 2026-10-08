@@ -153,9 +153,14 @@ export default function App() {
         : null;
     sessionChannel.current = channel;
     let checking = false,
+      checkAgain = false,
       active = true;
     async function checkSession() {
-      if (checking || !active || document.visibilityState === "hidden") return;
+      if (!active || document.visibilityState === "hidden") return;
+      if (checking) {
+        checkAgain = true;
+        return;
+      }
       checking = true;
       const epoch = sessionEpoch();
       try {
@@ -171,6 +176,10 @@ export default function App() {
         }
       } finally {
         checking = false;
+        if (active && checkAgain) {
+          checkAgain = false;
+          void checkSession();
+        }
       }
     }
     function ended() {
