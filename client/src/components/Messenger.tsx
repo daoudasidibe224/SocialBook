@@ -1,3 +1,5 @@
+import { usePersistentDraft } from "../usePersistentDraft";
+import DraftNotice from "./DraftNotice";
 import { mergeMessages } from "../messages";
 import type { FormEvent } from "react";
 import {
@@ -9,7 +11,7 @@ import {
   type Message,
 } from "../../../shared/contracts";
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, MessageCircle, Send } from "lucide-react";
+import { ArrowLeft, MessageCircle, Send, Pin, PinOff, X } from "lucide-react";
 import { io } from "socket.io-client";
 import { API_URL, api, errorMessage, dateLabel } from "../api";
 import { Avatar } from "./Post";
@@ -23,20 +25,20 @@ export default function Messenger({
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [current, setCurrent] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [draft, setDraft] = useState("");
+  const draft = usePersistentDraft(
+    current
+      ? { kind: "message", userId: user._id, conversationId: current._id }
+      : null,
+  );
+  const [search, setSearch] = useState("");
+  const [pinBusy, setPinBusy] = useState(false);
+  const pinning = useRef(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const currentRef = useRef<Conversation | null>(null);
   currentRef.current = current;
-  const draftRef = useRef(draft);
-  draftRef.current = draft;
   const sending = useRef(false);
-  const retry = useRef<{
-    requestId: string;
-    conversationId: string;
-    text: string;
-  } | null>(null);
   const end = useRef<HTMLDivElement>(null);
   const friendId = new URLSearchParams(location.search).get("with");
   useEffect(() => {
@@ -44,7 +46,14 @@ export default function Messenger({
     api
       .get(conversationSchema.array(), `/api/conversations/${user._id}`)
       .then((res) => {
-        if (active) setConversations(res.data);
+        if (active) {
+          setConversations(res.data);
+          setCurrent((previous) =>
+            previous
+              ? (res.data.find((c) => c._id === previous._id) ?? previous)
+              : null,
+          );
+        }
       })
       .catch((err) => {
         if (active) setError(errorMessage(err));
@@ -55,7 +64,14 @@ export default function Messenger({
           conversationSchema.array(),
           `/api/conversations/${user._id}`,
         );
-        if (active) setConversations(res.data);
+        if (active) {
+          setConversations(res.data);
+          setCurrent((previous) =>
+            previous
+              ? (res.data.find((c) => c._id === previous._id) ?? previous)
+              : null,
+          );
+        }
       } catch (err) {
         if (active) setError(errorMessage(err));
       }
@@ -82,6 +98,7 @@ export default function Messenger({
         void catchUp();
       }
     });
+    socket.on("conversationsChanged", () => void syncConversations());
     socket.on("getMessage", (payload: unknown) => {
       if (!active) return;
       const parsed = messageSchema.safeParse(payload);
@@ -100,10 +117,12 @@ export default function Messenger({
         );
     });
     socket.on("disconnect", (reason) => {
-      if (active && reason === "io server disconnect")
+      if (active && reason === "io server disconnect") {
+        window.dispatchEvent(new Event("community-session-ended"));
         setError(
           "Votre session a pris fin. Reconnectez-vous pour utiliser la messagerie.",
         );
+      }
     });
     return () => {
       active = false;
@@ -115,8 +134,7 @@ export default function Messenger({
     let active = true;
     setLoading(true);
     setMessages([]);
-    setDraft("");
-    retry.current = null;
+    setSearch("");
     api
       .get(messageSchema.array(), `/api/messages/${current._id}`)
       .then((res) => {
@@ -160,32 +178,27 @@ export default function Messenger({
   }
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (sending.current || !draft.trim() || !current || loading) return;
+    if (sending.current || !draft.text.trim() || !current || loading) return;
     const conversationId = current._id;
-    const value = draft.trim();
-    const original = draft;
-    if (
-      !retry.current ||
-      retry.current.conversationId !== conversationId ||
-      retry.current.text !== value
-    )
-      retry.current = {
-        requestId: crypto.randomUUID(),
-        conversationId,
-        text: value,
-      };
-    const intent = retry.current;
     sending.current = true;
     setBusy(true);
     setError("");
     try {
-      const { data } = await api.post("/api/messages", intent, messageSchema);
+      const snapshot = await draft.prepare();
+      const { data } = await api.post(
+        "/api/messages",
+        {
+          conversationId,
+          text: snapshot.text.trim(),
+          requestId: snapshot.requestId,
+        },
+        messageSchema,
+      );
       if (!data) throw new Error("Le message n’a pas été confirmé. Réessayez.");
       if (currentRef.current?._id === conversationId) {
         setMessages((previous) => mergeMessages(previous, [data]));
-        if (draftRef.current === original) setDraft("");
       }
-      if (retry.current?.requestId === intent.requestId) retry.current = null;
+      await draft.acknowledge(snapshot);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -193,6 +206,44 @@ export default function Messenger({
       setBusy(false);
     }
   }
+  async function togglePin() {
+    if (!current || pinning.current) return;
+    const id = current._id;
+    pinning.current = true;
+    setPinBusy(true);
+    setError("");
+    try {
+      const response = await api.patch(`/api/conversations/${id}/pin`, {
+        pinned: !current.pinned,
+      });
+      const data = conversationSchema.parse(response.data);
+      if (data) {
+        setConversations((previous) =>
+          previous.map((c) => (c._id === id ? data : c)),
+        );
+        setCurrent((previous) => (previous?._id === id ? data : previous));
+      }
+    } catch (error) {
+      setError(errorMessage(error));
+    } finally {
+      pinning.current = false;
+      setPinBusy(false);
+    }
+  }
+  const normalized = (text: string) =>
+    text
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLocaleLowerCase("fr");
+  const visibleMessages = messages.filter((message) =>
+    normalized(message.text).includes(normalized(search.trim())),
+  );
+  const orderedConversations = [...conversations].sort(
+    (a, b) =>
+      Number(b.pinned) - Number(a.pinned) ||
+      b.updatedAt.localeCompare(a.updatedAt) ||
+      a._id.localeCompare(b._id),
+  );
   const friend = users.find(
     (u) => current?.members.includes(u._id) && u._id !== user._id,
   );
@@ -205,7 +256,7 @@ export default function Messenger({
       <aside className="chat-list">
         <h2>Conversations</h2>
         {conversations.length ? (
-          conversations.map((c) => {
+          orderedConversations.map((c) => {
             const person = users.find(
               (u) => c.members.includes(u._id) && u._id !== user._id,
             );
@@ -218,7 +269,9 @@ export default function Messenger({
                 <Avatar user={person} />
                 <span>
                   {person?.pseudo || "Membre supprimé"}
-                  <small>Ouvrir la conversation</small>
+                  <small>
+                    {c.pinned ? "Épinglée" : "Ouvrir la conversation"}
+                  </small>
                 </span>
               </button>
             );
@@ -260,15 +313,57 @@ export default function Messenger({
               </button>
               <Avatar user={friend} />
               <strong>{friend?.pseudo || "Conversation"}</strong>
+              <button
+                type="button"
+                className="icon-button"
+                disabled={pinBusy}
+                aria-pressed={current.pinned}
+                aria-label={
+                  current.pinned
+                    ? "Désépingler la conversation"
+                    : "Épingler la conversation"
+                }
+                onClick={() => void togglePin()}
+              >
+                {current.pinned ? <PinOff size={18} /> : <Pin size={18} />}
+              </button>
               <span className="label-chip">Privé</span>
             </header>
+            <div className="chat-compose">
+              <label className="sr-only" htmlFor="message-search">
+                Rechercher dans cette conversation
+              </label>
+              <input
+                id="message-search"
+                type="text"
+                role="searchbox"
+                inputMode="search"
+                placeholder="Rechercher dans cette conversation"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+              {search && (
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Effacer la recherche"
+                  onClick={() => setSearch("")}
+                >
+                  <X size={18} />
+                </button>
+              )}
+            </div>
             <div className="chat-messages" aria-live="polite">
               {loading ? (
                 <p className="muted">Chargement des messages…</p>
-              ) : messages.length === 0 ? (
-                <p className="muted">La conversation commence ici.</p>
+              ) : visibleMessages.length === 0 ? (
+                <p className="muted">
+                  {search
+                    ? "Aucun message ne correspond à votre recherche."
+                    : "La conversation commence ici."}
+                </p>
               ) : (
-                messages.map((m) => (
+                visibleMessages.map((m) => (
                   <div
                     key={m._id}
                     className={`message ${m.sender === user._id ? "own" : ""}`}
@@ -280,6 +375,7 @@ export default function Messenger({
               )}
               <div ref={end} />
             </div>
+            <DraftNotice draft={draft} busy={busy} />
             <form className="chat-compose" onSubmit={send}>
               <label className="sr-only" htmlFor="chat-message">
                 Votre message
@@ -287,15 +383,15 @@ export default function Messenger({
               <input
                 id="chat-message"
                 placeholder="Écrivez votre message…"
-                value={draft}
+                value={draft.text}
                 maxLength={2000}
-                onChange={(event) => setDraft(event.target.value)}
+                onChange={(event) => draft.setText(event.target.value)}
                 required
               />
               <button
                 className="primary"
                 aria-label="Envoyer le message"
-                disabled={busy || !draft.trim() || loading}
+                disabled={busy || !draft.ready || !draft.text.trim() || loading}
               >
                 <Send size={18} />
               </button>

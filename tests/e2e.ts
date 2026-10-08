@@ -99,6 +99,16 @@ async function run() {
     assert.ok(overflow.scroll <= overflow.width, "Horizontal overflow");
   }
   async function doubleSubmit(page: Page, label: string) {
+    await expect
+      .poll(() =>
+        page.getByLabel(label, { exact: true }).evaluate((element) => {
+          const button = element
+            .closest("form")
+            ?.querySelector("button:not([type=button])");
+          return button instanceof HTMLButtonElement && !button.disabled;
+        }),
+      )
+      .toBe(true);
     await page.getByLabel(label, { exact: true }).evaluate((element) => {
       const form = element.closest("form");
       if (!(form instanceof HTMLFormElement))
@@ -109,6 +119,13 @@ async function run() {
   }
   async function login(page: Page, email: string) {
     await page.goto(url);
+    await page.locator(".auth-card, .composer").first().waitFor();
+    if (
+      await page
+        .getByRole("heading", { name: "Fil d’actualité", exact: true })
+        .isVisible()
+    )
+      return;
     await page.getByLabel("Adresse e-mail").fill(email);
     await page.getByLabel("Mot de passe", { exact: true }).fill("Password123!");
     await page
@@ -125,6 +142,212 @@ async function run() {
       } catch {}
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    console.log("session epoch / minimal signup / expiration");
+    const minimalContext = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+    });
+    const minimalPage = await minimalContext.newPage();
+    minimalPage.on("pageerror", (error) => errors.push(error.message));
+    await minimalPage.goto(url + "/message");
+    await expect(
+      minimalPage.getByRole("heading", { name: "Content de vous revoir." }),
+    ).toBeVisible();
+    let releaseOldSession: () => void = () => {};
+    const oldSessionGate = new Promise<void>((resolve) => {
+      releaseOldSession = resolve;
+    });
+    let oldSessionStarted: () => void = () => {};
+    const oldSessionRequest = new Promise<void>((resolve) => {
+      oldSessionStarted = resolve;
+    });
+    let heldOldSession = false;
+    await minimalPage.route("**/jwtid", async (route) => {
+      if (heldOldSession) {
+        await route.continue();
+        return;
+      }
+      heldOldSession = true;
+      const response = await route.fetch();
+      assert.equal(response.status(), 401);
+      oldSessionStarted();
+      await oldSessionGate;
+      await route.fulfill({ response });
+    });
+    await minimalPage.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await oldSessionRequest;
+    await minimalPage
+      .getByRole("button", { name: "Créer un compte", exact: true })
+      .click();
+    await expect(
+      minimalPage.getByLabel("Pseudo (facultatif)", { exact: true }),
+    ).toBeHidden();
+    await minimalPage
+      .getByLabel("Adresse e-mail")
+      .fill("private-minimal@example.test");
+    await minimalPage
+      .getByLabel("Mot de passe", { exact: true })
+      .fill("Password123!");
+    await minimalPage
+      .getByRole("button", { name: "Afficher le mot de passe" })
+      .click();
+    await expect(
+      minimalPage.getByLabel("Mot de passe", { exact: true }),
+    ).toHaveAttribute("type", "text");
+    await doubleSubmit(minimalPage, "Adresse e-mail");
+    await expect(
+      minimalPage.getByRole("heading", {
+        name: "Fil d’actualité",
+        exact: true,
+      }),
+    ).toBeVisible();
+    releaseOldSession();
+    await minimalPage.waitForTimeout(200);
+    await expect(
+      minimalPage.getByRole("heading", {
+        name: "Fil d’actualité",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      minimalPage.getByRole("button", { name: "Créer un compte", exact: true }),
+    ).toHaveCount(0);
+    const minimalUser = await User.findOne({
+      email: "private-minimal@example.test",
+    });
+    assert.ok(minimalUser);
+    assert.ok(!minimalUser.pseudo.includes("private-minimal"));
+    console.log(
+      "cross-tab identity replacement / private bookmarks and drafts",
+    );
+    const accountBContext = await browser.newContext();
+    const accountBRegistration = await accountBContext.request.post(
+      "http://127.0.0.1:5013/api/user/register",
+      {
+        data: {
+          pseudo: "sessionB",
+          email: "session-b@example.test",
+          password: "Password123!",
+        },
+      },
+    );
+    assert.equal(accountBRegistration.status(), 201);
+    const accountB = await accountBRegistration.json();
+    await accountBContext.close();
+    const bookmarkPostResponse = await minimalContext.request.post(
+      "http://127.0.0.1:5013/api/post",
+      {
+        data: {
+          message: "Une publication pour vérifier le scope privé",
+          requestId: crypto.randomUUID(),
+        },
+      },
+    );
+    assert.equal(bookmarkPostResponse.status(), 201);
+    const bookmarkPost = await bookmarkPostResponse.json();
+    await minimalPage.evaluate(
+      ({ userId, postId }) =>
+        localStorage.setItem(
+          `trainingbook:saved:${userId}`,
+          JSON.stringify([postId]),
+        ),
+      { userId: String(minimalUser._id), postId: bookmarkPost._id },
+    );
+    await minimalPage.reload();
+    await expect(
+      minimalPage.getByRole("button", {
+        name: "Retirer des sauvegardes",
+        exact: true,
+      }),
+    ).toHaveCount(1);
+    await minimalPage.goto(url + `/message?with=${accountB.user}`);
+    await minimalPage
+      .getByLabel("Votre message", { exact: true })
+      .fill("Brouillon privé du premier compte");
+    await expect
+      .poll(() =>
+        minimalPage.evaluate(() =>
+          Object.values(localStorage).some((value) =>
+            value.includes("Brouillon privé du premier compte"),
+          ),
+        ),
+      )
+      .toBe(true);
+    const minimalPeer = await minimalContext.newPage();
+    await minimalPeer.goto(url + `/message?with=${accountB.user}`);
+    await expect(
+      minimalPeer.getByLabel("Votre message", { exact: true }),
+    ).toHaveValue("Brouillon privé du premier compte");
+    await minimalContext.request.post("http://127.0.0.1:5013/api/user/login", {
+      data: { email: "session-b@example.test", password: "Password123!" },
+    });
+    await minimalPeer.bringToFront();
+    await minimalPeer.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(
+      minimalPeer.getByRole("heading", {
+        name: "Fil d’actualité",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      minimalPeer.getByRole("button", {
+        name: "Retirer des sauvegardes",
+        exact: true,
+      }),
+    ).toHaveCount(0);
+    await minimalPage.bringToFront();
+    await minimalPage.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(
+      minimalPage.getByRole("heading", {
+        name: "Fil d’actualité",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      minimalPage.getByRole("button", {
+        name: "Retirer des sauvegardes",
+        exact: true,
+      }),
+    ).toHaveCount(0);
+    await minimalPage.goto(url + `/message?with=${minimalUser._id}`);
+    await expect(
+      minimalPage.getByLabel("Votre message", { exact: true }),
+    ).toHaveValue("");
+    await minimalContext.request.post("http://127.0.0.1:5013/api/user/login", {
+      data: { email: "private-minimal@example.test", password: "Password123!" },
+    });
+    await minimalPage.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(
+      minimalPage.getByRole("heading", {
+        name: "Fil d’actualité",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      minimalPage.getByRole("button", {
+        name: "Retirer des sauvegardes",
+        exact: true,
+      }),
+    ).toHaveCount(1);
+    await minimalPeer.close();
+    await check(minimalPage);
+    await Session.updateMany(
+      { userId: String(minimalUser._id) },
+      { $set: { expiresAt: new Date(0) } },
+    );
+    await minimalPage.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(
+      minimalPage.getByRole("heading", { name: "Content de vous revoir." }),
+    ).toBeVisible();
+    await expect(
+      minimalPage.getByRole("button", { name: "Se déconnecter" }),
+    ).toHaveCount(0);
+    await minimalContext.close();
+    await User.deleteMany({ _id: { $in: [minimalUser._id, accountB.user] } });
+    await Session.deleteMany({
+      userId: { $in: [String(minimalUser._id), accountB.user] },
+    });
+    await Post.deleteMany({ posterId: String(minimalUser._id) });
+    await Conversation.deleteMany({ members: String(minimalUser._id) });
     const alice = await browser.newContext({
       viewport: { width: 1440, height: 1000 },
     });
@@ -145,10 +368,16 @@ async function run() {
       });
     }
     console.log("auth");
-    await a.goto(url);
+    await a.goto(url + "/message");
+    await expect(
+      a.getByRole("heading", { name: "Content de vous revoir." }),
+    ).toBeVisible();
+    await expect(a.getByRole("button", { name: "Se déconnecter" })).toHaveCount(
+      0,
+    );
     await check(a);
     await capture(a, "social-auth-desktop");
-    for (const width of [390, 320]) {
+    for (const width of [1440, 800, 390, 320]) {
       await a.setViewportSize({ width, height: 844 });
       await check(a);
       await capture(a, `social-auth-${width}`);
@@ -158,12 +387,31 @@ async function run() {
     await a
       .getByRole("button", { name: "Créer un compte", exact: true })
       .click();
-    await a.getByLabel("Pseudo", { exact: true }).fill("alice");
+    for (const width of [1440, 800, 390, 320]) {
+      await a.setViewportSize({ width, height: 844 });
+      await check(a);
+      await capture(a, `social-register-${width}`);
+      if (width < 400) {
+        const button = await a
+          .getByRole("button", { name: "Créer mon compte", exact: true })
+          .boundingBox();
+        assert.ok(
+          button && button.y + button.height < 844,
+          "Inscription visible dès la première vue",
+        );
+      }
+    }
+    await a.setViewportSize({ width: 1440, height: 1000 });
+    await a
+      .getByText("Choisir un pseudo (facultatif)", { exact: true })
+      .click();
+    await a.getByLabel("Pseudo (facultatif)", { exact: true }).fill("alice");
     await a.getByLabel("Adresse e-mail").fill("alice@example.test");
     await a.getByLabel("Mot de passe", { exact: true }).fill("Password123!");
-    await a.getByLabel("Confirmer le mot de passe").fill("Password123!");
     await a.getByRole("button", { name: "Créer mon compte" }).click();
-    await expect(a.getByRole("status")).toContainText("Votre compte est créé");
+    await expect(
+      a.getByRole("heading", { name: "Fil d’actualité", exact: true }),
+    ).toBeVisible();
     const register = await bob.request.post(
       "http://127.0.0.1:5013/api/user/register",
       {
@@ -178,6 +426,174 @@ async function run() {
     console.log("accounts");
     await login(a, "alice@example.test");
     await login(b, "bob@example.test");
+    console.log("recoverable post/photo drafts");
+    const aliceId = String((await User.findOne({ pseudo: "alice" }))?._id);
+    const draftKey = `community-sportive-draft:${aliceId}:post`;
+    const draftPhoto = await sharp({
+      create: { width: 3, height: 2, channels: 3, background: "#2467e8" },
+    })
+      .png()
+      .toBuffer();
+    await a
+      .getByLabel("Votre publication", { exact: true })
+      .fill("Photo et intention récupérables");
+    await a.getByLabel("Ajouter une photo", { exact: true }).setInputFiles({
+      name: "draft.png",
+      mimeType: "image/png",
+      buffer: draftPhoto,
+    });
+    await expect
+      .poll(() =>
+        a.evaluate((key) => Boolean(localStorage.getItem(key)), draftKey),
+      )
+      .toBe(true);
+    const storedPhoto = await a.evaluate(
+      (key) => JSON.parse(localStorage.getItem(key) ?? "null"),
+      draftKey,
+    );
+    assert.equal(storedPhoto.photo.content, draftPhoto.toString("base64"));
+    await a.reload();
+    await expect(
+      a.getByLabel("Votre publication", { exact: true }),
+    ).toHaveValue("Photo et intention récupérables");
+    await expect(a.getByAltText("Photo à publier")).toBeVisible();
+    let lostPhotoKey = "";
+    await a.route("**/api/post", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      lostPhotoKey =
+        route
+          .request()
+          .postData()
+          ?.match(/name="requestId"\r\n\r\n([^\r]+)/)?.[1] ?? "";
+      await route.fetch();
+      await route.abort();
+    });
+    await doubleSubmit(a, "Votre publication");
+    await expect(a.locator(".composer [role=alert]")).toBeVisible();
+    assert.equal(lostPhotoKey, storedPhoto.requestId);
+    await a.unroute("**/api/post");
+    await a.reload();
+    await expect(a.getByAltText("Photo à publier")).toBeVisible();
+    const resumed = a.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith("/api/post"),
+    );
+    await doubleSubmit(a, "Votre publication");
+    assert.equal((await resumed).status(), 200);
+    await expect(
+      a.getByLabel("Votre publication", { exact: true }),
+    ).toHaveValue("");
+    assert.equal(
+      await Post.countDocuments({
+        message: "Photo et intention récupérables",
+        deletedAt: null,
+      }),
+      1,
+    );
+    const draftPost = await Post.findOne({
+      message: "Photo et intention récupérables",
+    });
+    assert.ok(draftPost);
+    await alice.request.delete(
+      `http://127.0.0.1:5013/api/post/${draftPost._id}`,
+    );
+    await a.reload();
+    await expect(a.locator(".post-card")).toHaveCount(0);
+    await a
+      .getByLabel("Votre publication", { exact: true })
+      .fill("Derniers caractères avant navigation");
+    await a
+      .getByRole("navigation", { name: "Navigation principale" })
+      .getByRole("link", { name: "Explorer", exact: true })
+      .click();
+    await a
+      .getByRole("navigation", { name: "Navigation principale" })
+      .getByRole("link", { name: "Fil d’actualité", exact: true })
+      .click();
+    await expect(
+      a.getByLabel("Votre publication", { exact: true }),
+    ).toHaveValue("Derniers caractères avant navigation");
+    await a.reload();
+    await expect(
+      a.getByLabel("Votre publication", { exact: true }),
+    ).toHaveValue("Derniers caractères avant navigation");
+    await a
+      .getByRole("button", { name: "Effacer le brouillon", exact: true })
+      .click();
+    // Deux saisies concurrentes: aucune version n'écrase silencieusement l'autre.
+    const otherDraft = await alice.newPage();
+    await otherDraft.goto(url + "/home");
+    await a
+      .getByLabel("Votre publication", { exact: true })
+      .fill("Version de cet onglet");
+    await otherDraft
+      .getByLabel("Votre publication", { exact: true })
+      .fill("Version de l’autre onglet");
+    await expect
+      .poll(
+        async () =>
+          (await a.getByRole("button", { name: "Garder ma saisie" }).count()) +
+          (await otherDraft
+            .getByRole("button", { name: "Garder ma saisie" })
+            .count()),
+      )
+      .toBeGreaterThan(0);
+    await expect(
+      a.getByLabel("Votre publication", { exact: true }),
+    ).toHaveValue("Version de cet onglet");
+    await expect(
+      otherDraft.getByLabel("Votre publication", { exact: true }),
+    ).toHaveValue("Version de l’autre onglet");
+    if (await a.getByRole("button", { name: "Garder ma saisie" }).isVisible())
+      await a.getByRole("button", { name: "Garder ma saisie" }).click();
+    else
+      await otherDraft
+        .getByRole("button", { name: "Charger l’autre version" })
+        .click();
+    await otherDraft.close();
+    await a
+      .getByRole("button", { name: "Effacer le brouillon", exact: true })
+      .click();
+    await expect(
+      a.getByLabel("Votre publication", { exact: true }),
+    ).toHaveValue("");
+    await a.reload();
+    await expect(
+      a.getByLabel("Votre publication", { exact: true }),
+    ).toHaveValue("");
+    await a.evaluate(
+      (key) => localStorage.setItem(key, "{malformed"),
+      draftKey,
+    );
+    await a.reload();
+    await expect(a.locator(".composer [role=status]")).toContainText(
+      "invalide",
+    );
+    await expect(
+      a.getByLabel("Votre publication", { exact: true }),
+    ).toHaveValue("");
+    await a.evaluate((key) => localStorage.removeItem(key), draftKey);
+    await a.reload();
+    // Un quota de stockage ne perd pas la saisie et ne bloque pas une publication en ligne.
+    await a.evaluate(() => {
+      Storage.prototype.setItem = function () {
+        throw new DOMException("quota", "QuotaExceededError");
+      };
+    });
+    await a
+      .getByLabel("Votre publication", { exact: true })
+      .fill("Brouillon mémoire uniquement");
+    await expect(a.locator(".composer [role=status]")).toContainText(
+      "indisponible",
+    );
+    await expect(
+      a.getByLabel("Votre publication", { exact: true }),
+    ).toHaveValue("Brouillon mémoire uniquement");
+    await a.reload();
     console.log("post");
     await a
       .getByLabel("Votre publication", { exact: true })
@@ -242,7 +658,7 @@ async function run() {
       "Bravo pour cette séance !",
     );
     assert.equal(await Post.countDocuments({ deleted: false }), 1);
-    const persistedPost = await Post.findOne();
+    const persistedPost = await Post.findOne({ deleted: false });
     assert.ok(persistedPost);
     assert.equal(persistedPost.comments.length, 1);
     await a.reload();
@@ -348,6 +764,11 @@ async function run() {
     );
     await expect(a.locator(".chat-main [role=alert]")).toBeVisible();
     await a.unroute("**/api/messages");
+    await a.reload();
+    await a.locator(".chat-contact").filter({ hasText: "bob" }).first().click();
+    await expect(a.getByLabel("Votre message", { exact: true })).toHaveValue(
+      "Confirmation après réponse perdue",
+    );
     const retryMessage = a.waitForRequest(
       (request) =>
         request.url().endsWith("/api/messages") && request.method() === "POST",
@@ -375,6 +796,177 @@ async function run() {
     assert.equal(
       await Message.countDocuments({
         text: "Confirmation après réponse perdue",
+      }),
+      1,
+    );
+    console.log("private pins / search / recoverable message drafts");
+    await a
+      .getByRole("button", { name: "Épingler la conversation", exact: true })
+      .click();
+    await expect(
+      a.getByRole("button", {
+        name: "Désépingler la conversation",
+        exact: true,
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      a2.getByRole("button", {
+        name: "Désépingler la conversation",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      b.getByRole("button", { name: "Épingler la conversation", exact: true }),
+    ).toBeVisible();
+    await a
+      .getByLabel("Rechercher dans cette conversation", { exact: true })
+      .fill("REPONSE PERDUE");
+    await expect(a.locator(".chat-messages .message")).toHaveCount(1);
+    await a
+      .getByLabel("Rechercher dans cette conversation", { exact: true })
+      .fill("introuvable");
+    await expect(a.locator(".chat-messages")).toContainText("Aucun message");
+    await a.getByRole("button", { name: "Effacer la recherche" }).click();
+    await a
+      .getByLabel("Votre message", { exact: true })
+      .fill("Un brouillon pour cette conversation");
+    await expect
+      .poll(() =>
+        a.evaluate(
+          () =>
+            Object.keys(localStorage).filter((key) => key.includes(":message:"))
+              .length,
+        ),
+      )
+      .toBe(1);
+    await a.reload();
+    await a.locator(".chat-contact").filter({ hasText: "bob" }).first().click();
+    await expect(a.getByLabel("Votre message", { exact: true })).toHaveValue(
+      "Un brouillon pour cette conversation",
+    );
+    await expect(
+      a.getByRole("button", {
+        name: "Désépingler la conversation",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await a
+      .getByRole("button", { name: "Effacer le brouillon", exact: true })
+      .click();
+    await expect(a.getByLabel("Votre message", { exact: true })).toHaveValue(
+      "",
+    );
+    const thirdContext = await browser.newContext();
+    const thirdRegistration = await thirdContext.request.post(
+      "http://127.0.0.1:5013/api/user/register",
+      {
+        data: {
+          pseudo: "charlie",
+          email: "charlie@example.test",
+          password: "Password123!",
+        },
+      },
+    );
+    assert.equal(thirdRegistration.status(), 201);
+    const thirdUser = await thirdRegistration.json();
+    await alice.request.post("http://127.0.0.1:5013/api/conversations", {
+      data: { receiverId: thirdUser.user },
+    });
+    await thirdContext.close();
+    await a.reload();
+    await a.locator(".chat-contact").filter({ hasText: "bob" }).first().click();
+    await a
+      .getByLabel("Votre message", { exact: true })
+      .fill("Texte juste avant changement de conversation");
+    await a
+      .locator(".chat-contact")
+      .filter({ hasText: "charlie" })
+      .first()
+      .click();
+    await a.locator(".chat-contact").filter({ hasText: "bob" }).first().click();
+    await expect(a.getByLabel("Votre message", { exact: true })).toHaveValue(
+      "Texte juste avant changement de conversation",
+    );
+    await a.reload();
+    await a.locator(".chat-contact").filter({ hasText: "bob" }).first().click();
+    await expect(a.getByLabel("Votre message", { exact: true })).toHaveValue(
+      "Texte juste avant changement de conversation",
+    );
+    await a
+      .getByRole("button", { name: "Effacer le brouillon", exact: true })
+      .click();
+    console.log("late message response");
+    let releaseResponse: () => void = () => {};
+    const responseGate = new Promise<void>((resolve) => {
+      releaseResponse = resolve;
+    });
+    let persistedRequest: () => void = () => {};
+    const requestPersisted = new Promise<void>((resolve) => {
+      persistedRequest = resolve;
+    });
+    await a.route("**/api/messages", async (route) => {
+      const response = await route.fetch();
+      persistedRequest();
+      await responseGate;
+      await route.fulfill({ response });
+    });
+    await a
+      .getByLabel("Votre message", { exact: true })
+      .fill("Réponse tardive dans la première conversation");
+    await doubleSubmit(a, "Votre message");
+    await Promise.race([
+      requestPersisted,
+      new Promise<void>((_, reject) =>
+        setTimeout(() => {
+          releaseResponse();
+          reject(new Error("Le message retardé n’a pas atteint l’API."));
+        }, 10000),
+      ),
+    ]);
+    await a
+      .locator(".chat-contact")
+      .filter({ hasText: "charlie" })
+      .first()
+      .click();
+    await a
+      .getByLabel("Votre message", { exact: true })
+      .fill("Brouillon distinct pour Charlie");
+    await expect
+      .poll(() =>
+        a.evaluate(() =>
+          Object.values(localStorage).some((value) =>
+            value.includes("Brouillon distinct pour Charlie"),
+          ),
+        ),
+      )
+      .toBe(true);
+    releaseResponse();
+    await expect(
+      a.getByRole("button", { name: "Envoyer le message" }),
+    ).toBeEnabled();
+    await a.unroute("**/api/messages");
+    await expect(a.getByLabel("Votre message", { exact: true })).toHaveValue(
+      "Brouillon distinct pour Charlie",
+    );
+    await a.reload();
+    await a
+      .locator(".chat-contact")
+      .filter({ hasText: "charlie" })
+      .first()
+      .click();
+    await expect(a.getByLabel("Votre message", { exact: true })).toHaveValue(
+      "Brouillon distinct pour Charlie",
+    );
+    await a
+      .getByRole("button", { name: "Effacer le brouillon", exact: true })
+      .click();
+    await a.locator(".chat-contact").filter({ hasText: "bob" }).first().click();
+    await expect(a.getByLabel("Votre message", { exact: true })).toHaveValue(
+      "",
+    );
+    assert.equal(
+      await Message.countDocuments({
+        text: "Réponse tardive dans la première conversation",
       }),
       1,
     );
@@ -446,7 +1038,7 @@ async function run() {
       /5013\/uploads\/profil/,
     );
     console.log("responsive");
-    for (const width of [1440, 390, 320]) {
+    for (const width of [1440, 800, 390, 320]) {
       await a.setViewportSize({ width, height: 900 });
       for (const route of [
         "/home",
@@ -498,8 +1090,14 @@ async function run() {
     await expect(a.locator(".post-card")).toHaveCount(0);
     await a.reload();
     await expect(a.locator(".post-card")).toHaveCount(0);
-    await a2.close();
     await a.getByRole("button", { name: "Se déconnecter" }).click();
+    await expect(
+      a2.getByRole("heading", { name: "Content de vous revoir." }),
+    ).toBeVisible();
+    await expect(
+      a2.getByRole("button", { name: "Se déconnecter" }),
+    ).toHaveCount(0);
+    await a2.close();
     await expect(
       a.getByRole("heading", { name: "Content de vous revoir." }),
     ).toBeVisible();
@@ -509,7 +1107,7 @@ async function run() {
     ).toBeVisible();
     assert.deepEqual(errors, []);
     console.log(
-      "E2E PASS : inscription/connexion, doubles soumissions post/commentaire/message, clés conservées après erreur réseau, conflit édition 2 onglets, likes/sauvegarde/reload/follow, messages 3 onglets HTTP/socket avec réponse perdue et rattrapage après coupure, bio/photo/reload, suppression/logout, 7 vues à 1440/390/320, clavier Escape/mouvement réduit, aucune erreur ou overflow.",
+      "E2E PASS : inscription/connexion, doubles soumissions post/commentaire/message, clés conservées après erreur réseau, conflit édition 2 onglets, likes/sauvegarde/reload/follow, messages 3 onglets HTTP/socket avec réponse perdue et rattrapage après coupure, bio/photo/reload, suppression/logout, 7 vues à 1440/800/390/320; restauration texte/photo/UUID, quotas, conflits brouillons, épingles privées 2 onglets, recherche accent-insensible, réponse tardive sans effacer une autre conversation, logout multi-onglets, clavier Escape/mouvement réduit, aucune erreur ou overflow.",
     );
   } catch (error) {
     console.error("Browser errors", errors);

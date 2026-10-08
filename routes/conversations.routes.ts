@@ -7,6 +7,8 @@ import * as conversationController from "../controllers/conversation.controller"
 //new conv
 router.post("/", conversationController.newConversation);
 
+router.patch("/:id/pin", conversationController.setPinned);
+
 //get conv of a user
 router.get("/:id", conversationController.getUserConv);
 

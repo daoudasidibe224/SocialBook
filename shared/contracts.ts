@@ -28,6 +28,7 @@ export const postSchema = z.object({
   updatedAt: z.string(),
 });
 export const conversationSchema = z.object({
+  pinned: z.boolean().default(false),
   _id: identifier,
   members: z.array(identifier).length(2),
   createdAt: z.string(),

@@ -1,3 +1,9 @@
+import { sessionEpoch } from "./session";
+declare module "axios" {
+  interface AxiosRequestConfig {
+    communitySessionEpoch?: number;
+  }
+}
 import axios from "axios";
 import { z } from "zod";
 export const API_URL = (
@@ -9,6 +15,22 @@ const transport = axios.create({
   withCredentials: true,
   timeout: 15000,
 });
+transport.interceptors.request.use((config) => {
+  config.communitySessionEpoch = sessionEpoch();
+  return config;
+});
+transport.interceptors.response.use(
+  (response) => response,
+  (error: unknown) => {
+    if (
+      axios.isAxiosError(error) &&
+      error.response?.status === 401 &&
+      error.config?.communitySessionEpoch === sessionEpoch()
+    )
+      window.dispatchEvent(new Event("community-session-ended"));
+    return Promise.reject(error);
+  },
+);
 export const api = {
   async get<T>(schema: z.ZodType<T>, url: string): Promise<{ data: T }> {
     const response = await transport.get<unknown>(url);

@@ -7,6 +7,7 @@ import type { Message } from "../shared/contracts";
 export interface ServerEvents {
   getMessage: (message: Message) => void;
   sessionReady: () => void;
+  conversationsChanged: () => void;
 }
 export interface SocketIdentity {
   userId: string;

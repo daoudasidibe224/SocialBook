@@ -13,6 +13,8 @@ import {
   X,
 } from "lucide-react";
 import { api, errorMessage, imageUrl, dateLabel } from "../api";
+import { usePersistentDraft } from "../usePersistentDraft";
+import DraftNotice from "./DraftNotice";
 import Modal from "./ui/Modal";
 export function Avatar({
   user,
@@ -55,14 +57,16 @@ export function Composer({
   user: User;
   onPublish: () => Promise<void>;
 }) {
-  const [message, setMessage] = useState("");
-  const [file, setFile] = useState<File | null>(null);
+  const draft = usePersistentDraft({ kind: "post", userId: user._id });
+  const message = draft.text,
+    file = draft.photo,
+    setMessage = draft.setText,
+    setFile = draft.setPhoto;
   const [preview, setPreview] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const inFlight = useRef(false);
-  const submission = useRef<string | null>(null);
   useEffect(() => {
     if (!file) {
       setPreview("");
@@ -85,7 +89,6 @@ export function Composer({
       return;
     }
     setFile(image);
-    submission.current = null;
   }
   async function publish(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -94,18 +97,16 @@ export function Composer({
     setBusy(true);
     setError("");
     try {
+      const snapshot = await draft.prepare();
       const data = new FormData();
-      data.append("message", message);
+      data.append("message", snapshot.text);
       data.append("posterId", user._id);
-      submission.current ??= crypto.randomUUID();
-      data.append("requestId", submission.current);
-      if (file) data.append("file", file);
+      data.append("requestId", snapshot.requestId);
+      if (snapshot.photo) data.append("file", snapshot.photo);
       await api.post("/api/post", data);
       await onPublish();
-      setMessage("");
-      setFile(null);
+      await draft.acknowledge(snapshot);
       if (input.current) input.current.value = "";
-      submission.current = null;
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -132,7 +133,6 @@ export function Composer({
         maxLength={500}
         value={message}
         onChange={(event) => {
-          submission.current = null;
           setMessage(event.target.value);
         }}
         rows={3}
@@ -146,7 +146,6 @@ export function Composer({
             aria-label="Retirer la photo"
             disabled={busy}
             onClick={() => {
-              submission.current = null;
               setFile(null);
               if (input.current) input.current.value = "";
             }}
@@ -155,6 +154,7 @@ export function Composer({
           </button>
         </div>
       )}
+      <DraftNotice draft={draft} busy={busy} />
       {error && (
         <p role="alert" className="form-error">
           {error}
@@ -175,7 +175,7 @@ export function Composer({
         <span className="char-count">{message.length}/500</span>
         <button
           className="primary"
-          disabled={busy || (!message.trim() && !file)}
+          disabled={busy || !draft.ready || (!message.trim() && !file)}
         >
           {busy ? "Publication…" : "Publier"}
           <Send size={16} />

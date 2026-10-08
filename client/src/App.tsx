@@ -1,3 +1,4 @@
+import { sessionEpoch, advanceSessionEpoch } from "./session";
 import {
   navigation,
   Header,
@@ -16,7 +17,7 @@ import {
   type Member,
   type Post,
 } from "../../shared/contracts";
-import { useEffect, useState, lazy } from "react";
+import { useEffect, useRef, useState, lazy } from "react";
 import { Activity, Bell, ArrowUpRight, RefreshCw, X } from "lucide-react";
 import { api, errorMessage, isUnauthorized } from "./api";
 const Auth = lazy(() => import("./components/Auth"));
@@ -48,6 +49,20 @@ export default function App() {
   const [saved, setSaved] = useState<string[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const path = route.split("?")[0];
+  const currentUserRef = useRef(user);
+  currentUserRef.current = user;
+  const sessionChannel = useRef<BroadcastChannel | null>(null);
+  const endingSession = useRef(false);
+  function clearSession() {
+    advanceSessionEpoch();
+    setUser(null);
+    setUsers([]);
+    setPosts([]);
+    setSaved([]);
+    setError("");
+    setSearchOpen(false);
+    navigate("/");
+  }
   useEffect(() => {
     const pop = () => setRoute(location.pathname + location.search);
     window.addEventListener("popstate", pop);
@@ -76,11 +91,13 @@ export default function App() {
   }
   async function refresh(id = user?._id) {
     if (!id) return;
+    const epoch = sessionEpoch();
     const [me, members, feed] = await Promise.all([
       api.get(userSchema, `/api/user/${id}`),
       api.get(memberSchema.array(), "/api/user"),
       api.get(postSchema.array(), "/api/post"),
     ]);
+    if (endingSession.current || epoch !== sessionEpoch()) return;
     setUser(me.data);
     setUsers(members.data);
     setPosts(feed.data);
@@ -89,22 +106,37 @@ export default function App() {
     );
   }
   async function login(id: string) {
+    const epoch = advanceSessionEpoch();
+    endingSession.current = false;
+    if (currentUserRef.current?._id !== id) {
+      setUser(null);
+      setUsers([]);
+      setPosts([]);
+      setSaved([]);
+      setSearchOpen(false);
+    }
     await refresh(id);
+    if (epoch !== sessionEpoch() || endingSession.current) return;
     setSaved(readSaved(id));
     navigate("/home");
+    sessionChannel.current?.postMessage("changed");
   }
   useEffect(() => {
     let active = true;
     async function init() {
+      const epoch = sessionEpoch();
       try {
         const { data } = await api.get(z.string(), "/jwtid");
-        if (active) {
+        if (active && epoch === sessionEpoch()) {
           await refresh(data);
+          if (!active || epoch !== sessionEpoch() || endingSession.current)
+            return;
           setSaved(readSaved(data));
           if (location.pathname === "/") navigate("/home");
         }
       } catch (err) {
-        if (active && !isUnauthorized(err)) setError(errorMessage(err));
+        if (active && epoch === sessionEpoch() && !isUnauthorized(err))
+          setError(errorMessage(err));
       } finally {
         if (active) setLoading(false);
       }
@@ -112,6 +144,59 @@ export default function App() {
     init();
     return () => {
       active = false;
+    };
+  }, []);
+  useEffect(() => {
+    const channel =
+      typeof BroadcastChannel !== "undefined"
+        ? new BroadcastChannel("community-sportive-session")
+        : null;
+    sessionChannel.current = channel;
+    let checking = false,
+      active = true;
+    async function checkSession() {
+      if (checking || !active || document.visibilityState === "hidden") return;
+      checking = true;
+      const epoch = sessionEpoch();
+      try {
+        const { data } = await api.get(z.string(), "/jwtid");
+        if (active && epoch === sessionEpoch()) {
+          endingSession.current = false;
+          if (currentUserRef.current?._id !== data) await login(data);
+        }
+      } catch (error) {
+        if (active && epoch === sessionEpoch() && isUnauthorized(error)) {
+          endingSession.current = true;
+          clearSession();
+        }
+      } finally {
+        checking = false;
+      }
+    }
+    function ended() {
+      endingSession.current = true;
+      clearSession();
+    }
+    function focused() {
+      void checkSession();
+    }
+    window.addEventListener("community-session-ended", ended);
+    window.addEventListener("focus", focused);
+    document.addEventListener("visibilitychange", focused);
+    if (channel)
+      channel.onmessage = (event) => {
+        if (event.data === "ended") ended();
+        else if (event.data === "changed") void checkSession();
+      };
+    const interval = setInterval(() => void checkSession(), 30000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+      window.removeEventListener("community-session-ended", ended);
+      window.removeEventListener("focus", focused);
+      document.removeEventListener("visibilitychange", focused);
+      channel?.close();
+      sessionChannel.current = null;
     };
   }, []);
   useEffect(() => {
@@ -151,10 +236,9 @@ export default function App() {
   async function logout() {
     try {
       await api.post("/api/user/logout");
-      setUser(null);
-      setUsers([]);
-      setPosts([]);
-      navigate("/");
+      endingSession.current = true;
+      clearSession();
+      sessionChannel.current?.postMessage("ended");
     } catch (err) {
       setError(errorMessage(err));
     }
@@ -167,11 +251,9 @@ export default function App() {
     } catch {
       /* Le compte serveur est supprimé même si le stockage local est indisponible. */
     }
-    setUser(null);
-    setUsers([]);
-    setPosts([]);
-    setSaved([]);
-    navigate("/");
+    endingSession.current = true;
+    clearSession();
+    sessionChannel.current?.postMessage("ended");
   }
   const openProfile = (id: string) => navigate(`/profil?user=${id}`);
   const profileId = new URLSearchParams(route.split("?")[1]).get("user");
@@ -357,7 +439,7 @@ export default function App() {
             </div>
           )}
           {path === "/message" ? (
-            <Messenger key={route} user={user} users={users} />
+            <Messenger key={user._id + route} user={user} users={users} />
           ) : path === "/notification" ? (
             <>
               <p className="section-description">
@@ -418,6 +500,7 @@ export default function App() {
                     <Activity size={80} aria-hidden="true" />
                   </div>
                   <Composer
+                    key={`composer:${user._id}`}
                     user={user}
                     onPublish={async () => {
                       await refresh();
@@ -459,7 +542,11 @@ export default function App() {
                     deleteAccount={deleteAccount}
                   />
                   {person._id === user._id && (
-                    <Composer user={user} onPublish={refresh} />
+                    <Composer
+                      key={`composer:${user._id}`}
+                      user={user}
+                      onPublish={refresh}
+                    />
                   )}
                 </>
               )}

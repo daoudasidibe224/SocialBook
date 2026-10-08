@@ -1379,6 +1379,12 @@ svg {
 .chat-main > .form-error {
   margin: 0 14px 12px;
 }
+.chat-main > .draft-notice {
+  padding: 8px 14px;
+}
+.draft-notice p {
+  font-size: 12px;
+}
 /* Fenêtres */
 .modal {
   max-width: 460px;
@@ -1720,6 +1726,12 @@ svg {
     align-items: stretch;
     margin-top: 12px;
     padding: 10px 22px 25px;
+  }
+  .auth-card {
+    order: 1;
+  }
+  .auth-story {
+    order: 2;
   }
   .auth-story h1 {
     font-size: 42px;

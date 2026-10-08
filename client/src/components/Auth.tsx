@@ -1,6 +1,6 @@
 import type { FormEvent } from "react";
 import { sessionSchema } from "../../../shared/contracts";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowUpRight, Activity, Users, MessageCircle } from "lucide-react";
 import { api, errorMessage } from "../api";
 import BlurText from "./ui/BlurText";
@@ -11,33 +11,31 @@ export default function Auth({
 }) {
   const [register, setRegister] = useState(false);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const submitting = useRef(false);
+  const errorElement = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (error) errorElement.current?.focus();
+  }, [error]);
   const [busy, setBusy] = useState(false);
   const [visible, setVisible] = useState(false);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
     setError("");
-    setSuccess("");
     setBusy(true);
     const fields = Object.fromEntries(new FormData(event.currentTarget));
     try {
-      if (register) {
-        if (fields.password !== fields.confirm)
-          throw new Error("Les mots de passe ne correspondent pas.");
-        await api.post("/api/user/register", fields);
-        setRegister(false);
-        setSuccess("Votre compte est créé. Vous pouvez vous connecter.");
-      } else {
-        const { data } = await api.post(
-          "/api/user/login",
-          fields,
-          sessionSchema,
-        );
-        await onLogin(sessionSchema.parse(data).user);
-      }
+      const { data } = await api.post(
+        register ? "/api/user/register" : "/api/user/login",
+        fields,
+        sessionSchema,
+      );
+      await onLogin(sessionSchema.parse(data).user);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -98,17 +96,19 @@ export default function Auth({
           </p>
           <form onSubmit={submit} key={String(register)}>
             {register && (
-              <label>
-                Pseudo
-                <input
-                  name="pseudo"
-                  autoComplete="nickname"
-                  minLength={3}
-                  maxLength={55}
-                  required
-                  placeholder="Votre pseudo"
-                />
-              </label>
+              <details>
+                <summary>Choisir un pseudo (facultatif)</summary>
+                <label>
+                  Pseudo (facultatif)
+                  <input
+                    name="pseudo"
+                    autoComplete="nickname"
+                    minLength={3}
+                    maxLength={55}
+                    placeholder="Un pseudo sera proposé"
+                  />
+                </label>
+              </details>
             )}
             <label>
               Adresse e-mail
@@ -149,25 +149,14 @@ export default function Auth({
                 </button>
               </div>
             </label>
-            {register && (
-              <label>
-                Confirmer le mot de passe
-                <input
-                  name="confirm"
-                  type="password"
-                  autoComplete="new-password"
-                  required
-                />
-              </label>
-            )}
             {error && (
-              <p className="form-error" role="alert">
+              <p
+                ref={errorElement}
+                tabIndex={-1}
+                className="form-error"
+                role="alert"
+              >
                 {error}
-              </p>
-            )}
-            {success && (
-              <p className="form-success" role="status">
-                {success}
               </p>
             )}
             <button disabled={busy} className="primary auth-submit">
@@ -183,10 +172,11 @@ export default function Auth({
             <span>{register ? "Déjà membre ?" : "Première visite ?"}</span>
             <button
               type="button"
+              disabled={busy}
               onClick={() => {
                 setRegister(!register);
                 setError("");
-                setSuccess("");
+                setVisible(false);
               }}
             >
               {register ? "Se connecter" : "Créer un compte"}
