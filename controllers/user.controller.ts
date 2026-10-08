@@ -5,6 +5,7 @@ import Post from "../models/post.model";
 import Message from "../models/message.model";
 import Conversation from "../models/conversation.model";
 import { id, text, found, owns, fail } from "../utils/http";
+import { removeImage } from "../utils/image-storage";
 const publicFields = "_id pseudo picture bio followers following createdAt";
 export const getAllUsers: Handler = async (req, res) =>
   res.json(await User.find().select(publicFields).lean());
@@ -28,6 +29,9 @@ export const updateUser: Handler = async (req, res) => {
 export const deleteUser: Handler = async (req, res) => {
   owns(id(req.params.id), req);
   const userId = String(currentUser(req)._id);
+  const pictures = await Post.find({ posterId: userId })
+    .select("picture")
+    .lean();
   const conversations = await Conversation.find({ members: userId });
   await Message.deleteMany({
     conversationId: { $in: conversations.map((c) => String(c._id)) },
@@ -43,6 +47,11 @@ export const deleteUser: Handler = async (req, res) => {
     { $pull: { followers: userId, following: userId } },
   );
   await User.deleteOne({ _id: userId });
+  await Promise.all(
+    [currentUser(req).picture, ...pictures.map((post) => post.picture)].map(
+      removeImage,
+    ),
+  );
   res.clearCookie("jwt", { path: "/" });
   res.status(204).end();
 };

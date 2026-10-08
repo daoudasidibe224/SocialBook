@@ -1,20 +1,26 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { chromium, expect, type Page } from "@playwright/test";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose from "mongoose";
 import sharp from "sharp";
 import { Server } from "socket.io";
-import app from "../app";
+import { createApp } from "../app";
 import User from "../models/user.model";
 import Conversation from "../models/conversation.model";
 import initializeSocket from "../socket";
 async function run() {
   process.env.TOKEN_SECRET = "isolated-e2e-secret-with-at-least-32-characters";
   process.env.CLIENT_URL = "http://127.0.0.1:4513";
+  const imageDirectory = await mkdtemp(
+    path.join(tmpdir(), "social-e2e-photos-"),
+  );
+  process.env.UPLOAD_DIRECTORY = imageDirectory;
+  const app = createApp();
   const url = process.env.CLIENT_URL;
   const database = await MongoMemoryServer.create();
   await mongoose.connect(database.getUri());
@@ -358,6 +364,7 @@ async function run() {
     await new Promise<void>((resolve) => sockets.close(() => resolve()));
     await mongoose.disconnect();
     await database.stop();
+    await rm(imageDirectory, { recursive: true, force: true });
     if (viteLog) console.error(viteLog);
   }
 }

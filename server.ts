@@ -6,6 +6,7 @@ import mongoose from "mongoose";
 import { createApp } from "./app";
 import connect from "./config/db";
 import initializeSocket from "./socket";
+import { purgeOrphanImages } from "./utils/image-storage";
 dotenv.config({ path: [path.join(process.cwd(), ".env")], quiet: true });
 async function start() {
   if (
@@ -18,6 +19,23 @@ async function start() {
       "Renseignez MONGODB_URI, CLIENT_URL et un TOKEN_SECRET de 32 caractères minimum dans .env.",
     );
   await connect();
+  let purging = false;
+  const purge = async () => {
+    if (purging) return;
+    purging = true;
+    try {
+      await purgeOrphanImages();
+    } catch (error: unknown) {
+      console.error("Purge des photos à réessayer.", error);
+    } finally {
+      purging = false;
+    }
+  };
+  await purge();
+  const purgeTimer = setInterval(() => {
+    void purge();
+  }, 3_600_000);
+  purgeTimer.unref();
   const app = createApp();
   const server = createServer(app);
   const io = new Server(server, {
@@ -33,10 +51,12 @@ async function start() {
   server.listen(process.env.PORT || 5000, () =>
     console.log(`SocialBook écoute sur le port ${process.env.PORT || 5000}`),
   );
-  const stop = () =>
+  const stop = () => {
+    clearInterval(purgeTimer);
     io.close(() => {
       mongoose.disconnect().finally(() => process.exit(0));
     });
+  };
   process.on("SIGTERM", stop);
   process.on("SIGINT", stop);
 }

@@ -2,6 +2,7 @@ import type { Handler } from "../utils/http";
 import { currentUser } from "../utils/http";
 import Post from "../models/post.model";
 import { saveImage } from "../utils/upload";
+import { removeImage } from "../utils/image-storage";
 import { id, text, found, owns, fail } from "../utils/http";
 export const readPost: Handler = async (req, res) =>
   res.json(await Post.find().sort({ createdAt: -1 }).lean());
@@ -11,9 +12,8 @@ export const createPost: Handler = async (req, res) => {
   if (!message && !req.file)
     throw fail(400, "Écrivez un message ou ajoutez une image.");
   const picture = await saveImage(req.file, "posts");
-  res
-    .status(201)
-    .json(
+  try {
+    res.status(201).json(
       await Post.create({
         posterId: String(currentUser(req)._id),
         message,
@@ -22,6 +22,10 @@ export const createPost: Handler = async (req, res) => {
         comments: [],
       }),
     );
+  } catch (error: unknown) {
+    await removeImage(picture);
+    throw error;
+  }
 };
 export const updatePost: Handler = async (req, res) => {
   const post = found(await Post.findById(id(req.params.id)));
@@ -33,6 +37,7 @@ export const deletePost: Handler = async (req, res) => {
   const post = found(await Post.findById(id(req.params.id)));
   owns(post.posterId, req);
   await post.deleteOne();
+  await removeImage(post.picture);
   res.status(204).end();
 };
 const like = async (

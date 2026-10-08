@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fail } from "./http";
+import { uploadDirectory } from "./image-storage";
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 500000, files: 1, fields: 8 },
@@ -46,7 +47,7 @@ async function saveImage(
     );
   }
   const name = `${randomUUID()}.${png ? "png" : "jpg"}`;
-  const directory = path.join(__dirname, "..", "uploads", folder);
+  const directory = path.join(uploadDirectory(), folder);
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, name), image, { flag: "wx" });
   return `/uploads/${folder}/${name}`;

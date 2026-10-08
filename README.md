@@ -55,7 +55,7 @@ Ouvrez [http://127.0.0.1:4313](http://127.0.0.1:4313). L'API écoute sur le port
 
 Les utilisateurs, publications, relations, conversations et messages sont persistés dans la base indiquée par `MONGODB_URI`. Les sauvegardes de publications sont stockées dans `localStorage`, par utilisateur et par navigateur. Elles ne se synchronisent pas entre appareils. Un stockage local indisponible produit un message visible ; un contenu local invalide est ignoré.
 
-Les photos JPEG/PNG sont limitées à 500 000 octets et 16 millions de pixels. Le serveur les décode, retire les métadonnées, applique leur orientation et limite leur taille à 2400 pixels. Elles sont enregistrées sous un nom aléatoire dans `uploads/posts` ou `uploads/profil`. Ce dossier doit rester accessible en écriture et être sauvegardé avec la base. `UPLOAD_DIRECTORY` permet de choisir un chemin absolu différent. La suppression des données d'un compte ne purge pas actuellement les fichiers de photos du disque ; prévoyez une purge des fichiers orphelins pour un hébergement durable.
+Les photos JPEG/PNG sont limitées à 500 000 octets et 16 millions de pixels. Le serveur les décode, retire les métadonnées, applique leur orientation et limite leur taille à 2400 pixels. Elles sont enregistrées sous un nom aléatoire dans `uploads/posts` ou `uploads/profil`. Ce dossier doit rester accessible en écriture et être sauvegardé avec la base. `UPLOAD_DIRECTORY` permet de choisir un chemin absolu différent. Le remplacement d’une photo de profil et la suppression d’une publication ou d’un compte retirent aussi leurs photos. Une écriture refusée par la base nettoie la nouvelle image. Une purge au démarrage puis toutes les heures retire les fichiers générés sans référence, après une marge d’une heure qui protège les requêtes en cours. En cas d’erreur disque, le serveur journalise l’échec et la purge réessaie ; les images par défaut sont conservées. Le dossier configuré est partagé par les modes de développement et compilé.
 
 Cette version repart d'une base vide. Les anciennes images de démonstration et les anciens modules CRA/Redux ont été retirés. Elle n'inclut pas de migration des anciens enregistrements ; utilisez une base dédiée pour l'essayer.
 
@@ -66,6 +66,7 @@ npm run lint
 npm run typecheck
 npm test
 npm run build
+npm run test:compiled
 npx playwright install chromium
 npm run e2e
 npm audit
@@ -73,7 +74,7 @@ npm audit
 
 Les tests API utilisent une instance MongoDB isolée, téléchargée automatiquement au premier lancement. Ils vérifient l'authentification, la confidentialité, les autorisations, les formats et limites d'images, les commentaires, les suppressions en cascade, les conversations créées simultanément et les messages persistés transmis par Socket.IO. Ils n'accèdent pas à votre base configurée.
 
-Le scénario E2E démarre sa propre MongoDB, son API sur 5013 et Vite sur 4513. Ces ports doivent être libres. Il exerce les formulaires et mutations dans Chromium, deux sessions de messagerie, la persistance après rechargement, les sept vues à 1440, 390 et 320 pixels, les dialogues au clavier et les erreurs réseau. La variable facultative `SOCIAL_SCREENSHOTS` désigne un dossier où enregistrer les captures. Les tests créent des fichiers de photos dans `uploads/`, ignorés par Git.
+Le scénario E2E démarre sa propre MongoDB, son API sur 5013 et Vite sur 4513. Ces ports doivent être libres. Il exerce les formulaires et mutations dans Chromium, deux sessions de messagerie, la persistance après rechargement, les sept vues à 1440, 390 et 320 pixels, les dialogues au clavier et les erreurs réseau. La variable facultative `SOCIAL_SCREENSHOTS` désigne un dossier où enregistrer les captures. Les tests API et E2E utilisent des dossiers temporaires pour les photos, supprimés en fin de scénario. Le test du serveur compilé vérifie aussi l’écriture, la lecture HTTP et la suppression dans un dossier configuré.
 
 La CI reproduit lint, types, tests API, compilation et E2E sous Node.js 24.
 

@@ -9,6 +9,7 @@ import userRoutes from "./routes/user.routes";
 import postRoutes from "./routes/post.routes";
 import messageRoutes from "./routes/messages.routes";
 import conversationRoutes from "./routes/conversations.routes";
+import { uploadDirectory } from "./utils/image-storage";
 import { checkUser, requireAuth } from "./middleware/auth.middleware";
 export function createApp() {
   const app = express();
@@ -32,14 +33,7 @@ export function createApp() {
     next();
   });
   app.get("/health", (req, res) => res.json({ status: "ok" }));
-  app.use(
-    "/uploads",
-    express.static(
-      path.resolve(
-        process.env.UPLOAD_DIRECTORY || path.join(process.cwd(), "uploads"),
-      ),
-    ),
-  );
+  app.use("/uploads", express.static(uploadDirectory()));
   app.use(
     "/uploads",
     express.static(path.join(process.cwd(), "client/public/uploads")),

@@ -7,6 +7,12 @@ const { io: client } = require("socket.io-client");
 const { once } = require("node:events");
 process.env.TOKEN_SECRET = "test-secret-used-only-for-isolated-tests-123456";
 process.env.CLIENT_URL = "http://127.0.0.1:4313";
+const fs = require("node:fs/promises");
+const path = require("node:path");
+const uploadRoot = require("node:fs").mkdtempSync(
+  path.join(require("node:os").tmpdir(), "social-api-photos-"),
+);
+process.env.UPLOAD_DIRECTORY = uploadRoot;
 const app = require("../app").default;
 let db,
   alice,
@@ -55,6 +61,7 @@ after(async () => {
   if (server?.listening) await new Promise((resolve) => server.close(resolve));
   await mongoose.disconnect();
   await db?.stop();
+  await fs.rm(uploadRoot, { recursive: true, force: true });
 });
 test("anonymous requests finish with 401 and health remains available", async () => {
   await request(app).get("/health").expect(200);
@@ -255,6 +262,89 @@ test("uploads reject false formats, excess size and cross-user profile changes; 
     .expect("Content-Type", /image\/png/);
   await alice.post("/api/post").attach("file", png, "photo.png").expect(201);
 });
+test("image replacement, post deletion and rejected database writes leave no orphan files", async () => {
+  const png = await require("sharp")({
+    create: { width: 2, height: 2, channels: 3, background: "red" },
+  })
+    .png()
+    .toBuffer();
+  const previous = (await alice.get(`/api/user/${aliceId}`)).body.picture;
+  const replaced = await alice
+    .post("/api/user/upload")
+    .field("userId", aliceId)
+    .attach("file", png, "new.png")
+    .expect(200);
+  await request(app).get(previous).expect(404);
+  await request(app).get(replaced.body.picture).expect(200);
+  const photoPost = await alice
+    .post("/api/post")
+    .attach("file", png, "post.png")
+    .expect(201);
+  await bob.delete(`/api/post/${photoPost.body._id}`).expect(403);
+  await request(app).get(photoPost.body.picture).expect(200);
+  await alice.delete(`/api/post/${photoPost.body._id}`).expect(204);
+  await request(app).get(photoPost.body.picture).expect(404);
+  const Post = require("../models/post.model").default;
+  const beforeFiles = await fs.readdir(path.join(uploadRoot, "posts"));
+  const original = Post.create;
+  Post.create = async () => {
+    throw new Error("isolated database write failure");
+  };
+  try {
+    await alice.post("/api/post").attach("file", png, "failed.png").expect(500);
+  } finally {
+    Post.create = original;
+  }
+  assert.deepEqual(
+    await fs.readdir(path.join(uploadRoot, "posts")),
+    beforeFiles,
+  );
+});
+test("orphan sweep preserves referenced, recent, default and external files", async () => {
+  const { purgeOrphanImages, removeImage } = require("../utils/image-storage");
+  const folder = path.join(uploadRoot, "posts");
+  const orphan = `${require("node:crypto").randomUUID()}.png`;
+  const recent = `${require("node:crypto").randomUUID()}.png`;
+  await fs.writeFile(path.join(folder, orphan), "old unreferenced upload");
+  await fs.writeFile(path.join(folder, recent), "request in progress");
+  const old = new Date(Date.now() - 7_200_000);
+  await fs.utimes(path.join(folder, orphan), old, old);
+  const defaultFile = path.join(uploadRoot, "profil", "random-user.png");
+  const externalFile = path.join(uploadRoot, "outside.png");
+  await fs.writeFile(externalFile, "preserve outside managed folders");
+  await fs.writeFile(defaultFile, "default");
+  await fs.utimes(defaultFile, old, old);
+  await removeImage("/uploads/posts/../../profil/random-user.png");
+  await removeImage("/uploads/posts/../outside.png");
+  await removeImage("/uploads/profil/random-user.png");
+  assert.equal(await purgeOrphanImages(), 1);
+  await assert.rejects(fs.access(path.join(folder, orphan)), {
+    code: "ENOENT",
+  });
+  await fs.access(path.join(folder, recent));
+  await fs.access(defaultFile);
+  await fs.access(externalFile);
+  const me = await alice.get(`/api/user/${aliceId}`);
+  await request(app).get(me.body.picture).expect(200);
+  await removeImage(`/uploads/posts/${orphan}`);
+  await fs.writeFile(
+    path.join(folder, orphan),
+    "must survive database failure",
+  );
+  await fs.utimes(path.join(folder, orphan), old, old);
+  const Post = require("../models/post.model").default;
+  const originalFind = Post.find;
+  Post.find = () => {
+    throw new Error("isolated reference lookup failure");
+  };
+  try {
+    await assert.rejects(purgeOrphanImages(), /reference lookup failure/);
+  } finally {
+    Post.find = originalFind;
+  }
+  await fs.access(path.join(folder, orphan));
+  await fs.unlink(path.join(folder, orphan));
+});
 test("conversations and messages require membership and cannot forge sender identities", async () => {
   const response = await alice
     .post("/api/conversations")
@@ -337,6 +427,20 @@ test("invalid boundaries, missing records, empty bio and concurrent conversation
   );
 });
 test("deleting an account removes its conversations, messages, posts and social references", async () => {
+  const png = await require("sharp")({
+    create: { width: 2, height: 2, channels: 3, background: "blue" },
+  })
+    .png()
+    .toBuffer();
+  const profile = await eve
+    .post("/api/user/upload")
+    .field("userId", eveId)
+    .attach("file", png, "profile.png")
+    .expect(200);
+  const photoPost = await eve
+    .post("/api/post")
+    .attach("file", png, "photo.png")
+    .expect(201);
   await eve.post("/api/post").send({ message: "Temporary post" }).expect(201);
   await alice
     .patch(`/api/user/follow/${aliceId}`)
@@ -352,6 +456,8 @@ test("deleting an account removes its conversations, messages, posts and social 
     .expect(200);
   await eve.delete(`/api/user/${aliceId}`).expect(403);
   await eve.delete(`/api/user/${eveId}`).expect(204);
+  await request(app).get(profile.body.picture).expect(404);
+  await request(app).get(photoPost.body.picture).expect(404);
   await eve.get("/jwtid").expect(401);
   const members = await alice.get("/api/user").expect(200);
   assert.ok(!members.body.some((u) => u._id === eveId));

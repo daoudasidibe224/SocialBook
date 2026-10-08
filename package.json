@@ -2,7 +2,7 @@
   "name": "socialbook",
   "version": "2.0.0",
   "private": true,
-  "description": "R\u00e9seau social d\u00e9di\u00e9 aux entra\u00eenements",
+  "description": "Réseau social dédié aux entraînements",
   "engines": {
     "node": ">=24.15.0"
   },
@@ -18,7 +18,8 @@
     "typecheck": "tsc --noEmit && tsc -p client/tsconfig.json --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "e2e": "tsx tests/e2e.ts"
+    "e2e": "tsx tests/e2e.ts",
+    "test:compiled": "node --test tests/compiled.test.mjs"
   },
   "license": "ISC",
   "dependencies": {
