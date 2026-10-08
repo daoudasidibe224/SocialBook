@@ -2,6 +2,7 @@ import path from "node:path";
 import { readdir, stat, unlink } from "node:fs/promises";
 import User from "../models/user.model";
 import Post from "../models/post.model";
+import Image from "../models/image.model";
 
 const generatedName =
   /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.(png|jpg)$/;
@@ -30,6 +31,14 @@ export async function removeImage(url: string | null | undefined) {
   const file = imagePath(url);
   if (!file) return;
   try {
+    await Image.deleteOne({ _id: url });
+  } catch (error: unknown) {
+    console.error(
+      "Suppression de photo MongoDB différée jusqu’à la prochaine purge.",
+      error,
+    );
+  }
+  try {
     await unlink(file);
   } catch (error: unknown) {
     if (!missing(error))
@@ -47,9 +56,16 @@ export async function purgeOrphanImages(now = Date.now(), graceMs = 3_600_000) {
     Post.find().select("picture").lean(),
   ]);
   const referenced = new Set(
-    [...users, ...posts].map((record) => record.picture),
+    [...users, ...posts]
+      .map((record) => record.picture)
+      .filter((url): url is string => typeof url === "string"),
   );
   let removed = 0;
+  const deleted = await Image.deleteMany({
+    _id: { $nin: [...referenced] },
+    createdAt: { $lte: new Date(now - graceMs) },
+  });
+  removed += deleted.deletedCount;
   for (const folder of ["posts", "profil"]) {
     const directory = path.join(uploadDirectory(), folder);
     let files;

@@ -7,7 +7,11 @@ import { removeImage } from "../utils/image-storage";
 export const uploadProfil: Handler = async (req, res) => {
   owns(id(req.body.userId), req);
   if (!req.file) throw fail(400, "Choisissez une image.");
-  const picture = await saveImage(req.file, "profil");
+  const picture = await saveImage(
+    req.file,
+    "profil",
+    String(currentUser(req)._id),
+  );
   let previous;
   try {
     previous = found(

@@ -17,3 +17,5 @@ jobs:
       - run: npm run test:compiled
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e
+      - run: npm audit --audit-level=high
+      - run: docker build -t communaute-sportive:ci .

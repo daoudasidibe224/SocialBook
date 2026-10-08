@@ -4,6 +4,7 @@ import Post from "../models/post.model";
 import Conversation from "../models/conversation.model";
 import Message from "../models/message.model";
 import Session from "../models/session.model";
+import Image from "../models/image.model";
 export default async function connect() {
   await mongoose.connect(process.env.MONGODB_URI || "", {
     serverSelectionTimeoutMS: 10000,
@@ -14,5 +15,6 @@ export default async function connect() {
     Conversation.init(),
     Message.init(),
     Session.init(),
+    Image.init(),
   ]);
 }

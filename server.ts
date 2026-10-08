@@ -8,17 +8,11 @@ import connect from "./config/db";
 import type { ServerEvents, SocketIdentity } from "./socket";
 import initializeSocket from "./socket";
 import { purgeOrphanImages } from "./utils/image-storage";
+import { runtimeConfiguration, imageConfiguration } from "./config/runtime";
 dotenv.config({ path: [path.join(process.cwd(), ".env")], quiet: true });
 async function start() {
-  if (
-    !process.env.MONGODB_URI ||
-    !process.env.CLIENT_URL ||
-    !process.env.TOKEN_SECRET ||
-    process.env.TOKEN_SECRET.length < 32
-  )
-    throw new Error(
-      "Renseignez MONGODB_URI, CLIENT_URL et un TOKEN_SECRET de 32 caractères minimum dans .env.",
-    );
+  const configuration = runtimeConfiguration();
+  imageConfiguration();
   await connect();
   let purging = false;
   const purge = async () => {
@@ -54,8 +48,8 @@ async function start() {
   });
   app.set("io", io);
   initializeSocket(io);
-  server.listen(process.env.PORT || 5000, () =>
-    console.log(`SocialBook écoute sur le port ${process.env.PORT || 5000}`),
+  server.listen(configuration.PORT, configuration.HOST, () =>
+    console.log(`Communauté sportive écoute sur le port ${configuration.PORT}`),
   );
   const stop = () => {
     clearInterval(purgeTimer);

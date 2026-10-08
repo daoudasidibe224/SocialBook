@@ -55,7 +55,7 @@ export const createPost: Handler = async (req, res) => {
   };
   const existing = await replay();
   if (existing) return res.status(200).json(existing);
-  const picture = await saveImage(req.file, "posts");
+  const picture = await saveImage(req.file, "posts", posterId);
   try {
     res.status(201).json(
       await Post.create({

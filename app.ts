@@ -5,6 +5,8 @@ import path from "node:path";
 import { currentUser } from "./utils/http";
 import type { ErrorRequestHandler } from "express";
 import { z } from "zod";
+import mongoose from "mongoose";
+import Image from "./models/image.model";
 import userRoutes from "./routes/user.routes";
 import postRoutes from "./routes/post.routes";
 import messageRoutes from "./routes/messages.routes";
@@ -14,6 +16,14 @@ import { checkUser, requireAuth } from "./middleware/auth.middleware";
 export function createApp() {
   const app = express();
   app.disable("x-powered-by");
+  const proxy = z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(5)
+    .default(0)
+    .parse(process.env.TRUST_PROXY);
+  app.set("trust proxy", proxy);
   app.use(
     cors({
       origin: (origin, callback) =>
@@ -33,6 +43,26 @@ export function createApp() {
     next();
   });
   app.get("/health", (req, res) => res.json({ status: "ok" }));
+  app.get("/ready", async (_req, res) => {
+    try {
+      if (mongoose.connection.readyState !== 1 || !mongoose.connection.db)
+        throw new Error("Database unavailable");
+      await mongoose.connection.db.command({ ping: 1 }, { timeoutMS: 2000 });
+      res.json({ status: "ready" });
+    } catch {
+      res.status(503).json({ status: "unavailable" });
+    }
+  });
+  app.get("/uploads/:folder/:filename", async (req, res, next) => {
+    if (
+      !/^\/(uploads)\/(posts|profil)\/[a-f0-9-]{36}\.(png|jpg)$/.test(req.path)
+    )
+      return next();
+    const image = await Image.findById(req.path).select("+bytes");
+    if (!image) return next();
+    res.set("Cache-Control", "public, max-age=3600");
+    res.type(image.contentType).send(image.bytes);
+  });
   app.use("/uploads", express.static(uploadDirectory()));
   app.use(
     "/uploads",

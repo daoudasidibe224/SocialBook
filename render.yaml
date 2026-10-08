@@ -1,0 +1,33 @@
+# Configuration proposée, sans service ni base distante déjà créés.
+services:
+  - type: web
+    name: communaute-sportive
+    runtime: docker
+    plan: free
+    region: frankfurt
+    repo: https://github.com/daoudasidibe224/communaute-sportive
+    branch: improve/public-2026-10
+    autoDeployTrigger: off
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /ready
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: "10000"
+      - key: TRUST_PROXY
+        value: "1"
+      - key: IMAGE_STORAGE
+        value: mongo
+      - key: IMAGE_MAX_PER_USER
+        value: "20"
+      - key: IMAGE_MAX_TOTAL
+        value: "200"
+      - key: MONGODB_URI
+        sync: false
+      - key: TOKEN_SECRET
+        sync: false
+      - key: CLIENT_URL
+        sync: false
