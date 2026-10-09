@@ -6,7 +6,7 @@ services:
     plan: free
     region: frankfurt
     repo: https://github.com/daoudasidibe224/communaute-sportive
-    branch: improve/public-2026-10
+    branch: develop
     autoDeployTrigger: off
     dockerfilePath: ./Dockerfile
     healthCheckPath: /ready
