@@ -122,6 +122,12 @@ export function usePersistentDraft(scope: DraftScope | null) {
     if (!state.scope || keyOf(state.scope) !== key || !dirty.current) return;
     const snapshot: DraftSnapshot = { ...state, scope: state.scope };
     const timer = setTimeout(() => {
+      if (
+        !dirty.current ||
+        live.current.requestId !== snapshot.requestId ||
+        keyOf(live.current.scope) !== draftKey(snapshot.scope)
+      )
+        return;
       void flush(snapshot).catch(report);
     }, 200);
     return () => {
@@ -176,10 +182,13 @@ export function usePersistentDraft(scope: DraftScope | null) {
   }
   async function acknowledge(snapshot: DraftSnapshot) {
     const sentKey = draftKey(snapshot.scope);
-    try {
-      await queue.current;
+    const operation = queue.current.then(async () => {
       const cleared = await clearDraft(snapshot.scope, snapshot.requestId);
       if (cleared) versions.current.set(sentKey, null);
+    });
+    queue.current = operation.catch(() => {});
+    try {
+      await operation;
     } catch (error) {
       report(error);
     }
