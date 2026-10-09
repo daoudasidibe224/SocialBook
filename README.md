@@ -1,5 +1,7 @@
 # Communauté sportive
 
+[Essayer la démo publique](https://communaute-sportive.onrender.com). Le premier chargement peut prendre environ une minute après la mise en veille du service gratuit.
+
 Communauté sportive permet de publier une séance, suivre d'autres membres et échanger en privé. Le dépôt public s’appelle [communaute-sportive](https://github.com/daoudasidibe224/communaute-sportive).
 
 ## Ce que vous pouvez faire
@@ -125,6 +127,6 @@ La construction d’un conteneur ne confirme pas une publication. Un hébergeur 
 
 ## Livraison gratuite proposée
 
-La proposition `render.yaml` utilise un service Docker Free et MongoDB Atlas M0 externe. Aucun service ni cluster n’a encore été créé. Configurer `MONGODB_URI` avec TLS, l’utilisateur limité à la base dédiée et les adresses réseau nécessaires, puis les secrets `sync:false` et l’origine HTTPS exacte. Les photos résident dans Mongo, pas sur le disque éphémère de Render ; les quotas applicatifs n’empêchent pas les autres collections de remplir la base. Consulter les [limites Atlas Free](https://www.mongodb.com/docs/atlas/reference/free-shared-limitations/) et prévoir des exports/sauvegardes distincts. Aucun passage automatique à une offre payante n’est prévu.
+La proposition `render.yaml` utilise un service Docker Free et MongoDB Atlas M0 externe. La démonstration utilise un service Render Free à Francfort et un cluster Atlas M0 à Paris, avec un utilisateur limité à la base communaute_sportive et à ce cluster. Configurer `MONGODB_URI` avec TLS, l’utilisateur limité à la base dédiée et les adresses réseau nécessaires, puis les secrets `sync:false` et l’origine HTTPS exacte. Les photos résident dans Mongo, pas sur le disque éphémère de Render ; les quotas applicatifs n’empêchent pas les autres collections de remplir la base. Consulter les [limites Atlas Free](https://www.mongodb.com/docs/atlas/reference/free-shared-limitations/) et prévoir des exports/sauvegardes distincts. Aucun passage automatique à une offre payante n’est prévu.
 
-Render partage [750 heures gratuites par mois entre les services du workspace](https://render.com/docs/free), met en veille après 15 minutes sans trafic et peut prendre environ une minute à redémarrer. Deux services constamment actifs dépassent ce quota commun. La proposition désactive les déploiements automatiques, conserve la branche reviewable `improve/public-2026-10` et utilise la readiness de la base comme sonde. Le consentement GitHub Render, les accès aux bases, les secrets, les restrictions réseau et la validation de l’URL publique restent à effectuer. Cette configuration et les tests HTTPS locaux ne constituent pas un déploiement public confirmé.
+Render partage [750 heures gratuites par mois entre les services du workspace](https://render.com/docs/free), met en veille après 15 minutes sans trafic et peut prendre environ une minute à redémarrer. Deux services constamment actifs dépassent ce quota commun. La proposition désactive les déploiements automatiques, conserve la branche reviewable `improve/public-2026-10` et utilise la readiness de la base comme sonde. La démonstration publique est déployée depuis cette branche. La connexion privée et les secrets sont configurés dans Render ; les parcours sont contrôlés sur l’URL HTTPS réelle. Les tests locaux et la CI restent complémentaires aux vérifications publiques.
